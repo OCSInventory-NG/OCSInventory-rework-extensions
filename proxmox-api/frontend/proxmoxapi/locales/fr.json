@@ -1,0 +1,72 @@
+{
+    "generic": {
+        "actions": "Actions",
+        "add": "Ajouter",
+        "cancel": "Annuler",
+        "delete": "Supprimer",
+        "edit": "Modifier",
+        "no": "Non",
+        "save": "Enregistrer",
+        "yes": "Oui"
+    },
+    "proxmoxapi": {
+        "name": "Nom",
+        "add_node": "Ajouter un nœud",
+        "error_node_required": "Veuillez ajouter au moins un nœud.",
+        "add_server": "Ajouter un hyperviseur",
+        "all_servers": "Tous",
+        "asset_last_update": "Dernière mise à jour",
+        "asset_name": "Nom",
+        "asset_resource_type": "Type",
+        "asset_server_name": "Hyperviseur",
+        "asset_status": "Statut",
+        "asset_vmid": "VMID",
+        "back_to_servers": "Retour aux hyperviseurs",
+        "confirm_delete": "Êtes-vous sûr de vouloir supprimer ce hyperviseur?",
+        "created_at": "Créé le",
+        "delete_server": "Supprimer l'hyperviseur",
+        "description": "Description",
+        "edit_server": "Modifier l'hyperviseur",
+        "error_add": "Erreur lors de l'ajout de l'hyperviseur",
+        "error_delete": "Erreur lors de la suppression de l'hyperviseur",
+        "error_edit": "Erreur lors de la modification de l'hyperviseur",
+        "global_inventory_title": "Inventaire Proxmox",
+        "ip_address": "Adresse IP",
+        "is_active": "Actif",
+        "node_names": "Noms des nœuds",
+        "port": "Port",
+        "remove_node": "Supprimer le nœud",
+        "request_delay": "Délai entre requêtes (ms)",
+        "stat_containers": "Conteneurs",
+        "stat_running": "En cours d'exécution",
+        "stat_stopped": "Arrêtés",
+        "stat_total": "Total",
+        "stat_vms": "Machines virtuelles",
+        "proxmox_mail": "Proxmox Mail Gateway",
+        "proxmox_ve": "Proxmox VE",
+        "server_name": "Nom de l'hyperviseur",
+        "server_type": "Type de l'hyperviseur",
+        "subtitle": "Gestion des hyperviseurs Proxmox",
+        "success_add": "Hyperviseur ajouté avec succès",
+        "success_delete": "Hyperviseur supprimé avec succès",
+        "success_edit": "Hyperviseur modifié avec succès",
+        "title": "Hyperviseurs Proxmox",
+        "token_id": "ID du Token",
+        "token_secret": "Clé secrète du Token",
+        "updated_at": "Mis à jour le",
+        "username": "Utilisateur Proxmox",
+        "view_assets": "Voir les assets"
+    },
+    "rule": {
+        "proxmox_asset_synced": "Réception de l'inventaire Proxmox"
+    },
+    "trigger_fields": {
+        "proxmox": {
+            "node": "Nœud Proxmox",
+            "resource_type": "Type de ressource Proxmox",
+            "server": "Serveur Proxmox",
+            "status": "Statut Proxmox",
+            "vmid": "VMID Proxmox"
+        }
+    }
+}

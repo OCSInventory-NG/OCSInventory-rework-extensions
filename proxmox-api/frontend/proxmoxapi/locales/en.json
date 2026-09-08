@@ -1,0 +1,72 @@
+{
+    "generic": {
+        "actions": "Actions",
+        "add": "Add",
+        "cancel": "Cancel",
+        "delete": "Delete",
+        "edit": "Edit",
+        "no": "No",
+        "save": "Save",
+        "yes": "Yes"
+    },
+    "proxmoxapi": {
+        "name": "Name",
+        "add_node": "Add node",
+        "error_node_required": "Please add at least one node.",
+        "add_server": "Add hypervisor",
+        "all_servers": "All",
+        "asset_last_update": "Last update",
+        "asset_name": "Name",
+        "asset_resource_type": "Type",
+        "asset_server_name": "Hypervisor",
+        "asset_status": "Status",
+        "asset_vmid": "VMID",
+        "back_to_servers": "Back to hypervisors",
+        "confirm_delete": "Are you sure you want to delete this hypervisor?",
+        "created_at": "Created at",
+        "delete_server": "Delete hypervisor",
+        "description": "Description",
+        "edit_server": "Edit hypervisor",
+        "error_add": "Error adding hypervisor",
+        "error_delete": "Error deleting hypervisor",
+        "error_edit": "Error editing hypervisor",
+        "global_inventory_title": "Proxmox Inventory",
+        "ip_address": "IP address",
+        "is_active": "Active",
+        "node_names": "Node names",
+        "port": "Port",
+        "remove_node": "Remove node",
+        "request_delay": "Request delay (ms)",
+        "stat_containers": "Containers",
+        "stat_running": "Running",
+        "stat_stopped": "Stopped",
+        "stat_total": "Total",
+        "stat_vms": "Virtual machines",
+        "proxmox_mail": "Proxmox Mail Gateway",
+        "proxmox_ve": "Proxmox VE",
+        "server_name": "Hypervisor name",
+        "server_type": "Hypervisor type",
+        "subtitle": "Management of Proxmox hypervisors",
+        "success_add": "Hypervisor added successfully",
+        "success_delete": "Hypervisor deleted successfully",
+        "success_edit": "Hypervisor updated successfully",
+        "title": "Proxmox Hypervisors",
+        "token_id": "Token ID",
+        "token_secret": "Token secret",
+        "updated_at": "Updated at",
+        "username": "Proxmox user",
+        "view_assets": "View assets"
+    },
+    "rule": {
+        "proxmox_asset_synced": "Proxmox inventory received"
+    },
+    "trigger_fields": {
+        "proxmox": {
+            "node": "Proxmox node",
+            "resource_type": "Proxmox resource type",
+            "server": "Proxmox server",
+            "status": "Proxmox status",
+            "vmid": "Proxmox VMID"
+        }
+    }
+}
