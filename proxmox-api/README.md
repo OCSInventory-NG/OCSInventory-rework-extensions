@@ -25,27 +25,49 @@ OCS Inventory extension that integrates Proxmox VE hypervisors. It allows config
 **1. Copy the extension files**
 
 ```bash
-cp -r proxmoxapi /path/to/ocs-inventory-backend/extensions/
+cp -r backend/proxmoxapi /path/to/ocsinventory-backend/extensions/
 ```
 
-**2. Restart Django**
+The folder must be named `proxmoxapi` once deployed: it must match the
+`django_app` declared in `extension.json` and is what Django uses as the app
+label.
 
-**3. Apply migrations**
+**2. Install the extension**
 
 ```bash
-python manage.py migrate
+python manage.py extensions install proxmoxapi
 ```
 
-**4. Verify the extension appears as disabled in the UI**
+This registers the extension and applies its migrations. A plain
+`python manage.py migrate` does **not** do this on its own: an extension's
+migrations are only picked up once it has been installed, so simply copying
+the folder into `extensions/` has no effect until this command runs. The
+command marks the extension installed and restarts itself (a short
+confirmation is asked first) so Django loads it.
 
-**5. Enable the extension**
+Add `--enable` to enable it in the same step, or enable it separately:
+
+```bash
+python manage.py extensions enable proxmoxapi
+```
+
+**3. Restart the application server**
+
+Enabling the extension only takes effect in the database; the running
+application server(s) must be restarted for its API routes to be mounted.
+
+**4. Verify the extension appears as enabled**
+
+```bash
+python manage.py extensions list
+```
 
 ### Frontend
 
 **1. Copy the extension files**
 
 ```bash
-cp -r proxmoxapi /path/to/ocs-inventory-frontend/public/config/extensions/
+cp -r frontend/proxmoxapi /path/to/ocsinventory-frontend/public/extensions/
 ```
 
 **2. Enable the backend if not already done**
@@ -88,7 +110,7 @@ The schedule and settings for this action can be configured from the application
 
 ### Backend
 
-Deploy to `ocs-inventory-backend/extensions/`.
+Deploy to `ocsinventory-backend/extensions/`.
 
 ```
 backend/
@@ -107,7 +129,7 @@ backend/
 
 ### Frontend
 
-Deploy to `ocs-inventory-frontend/public/config/extensions/`.
+Deploy to `ocsinventory-frontend/public/extensions/`.
 
 ```
 frontend/
