@@ -1,0 +1,6 @@
+{
+    "max_server_workers": 4,
+    "max_node_workers": 4,
+    "qemu_net_types": ["virtio", "e1000", "e1000e", "vmxnet3", "rtl8139", "ne2k_pci"],
+    "section_names": ["RESOURCES", "NETWORKS", "QEMU_AGENT", "OPTIONS", "SNAPSHOTS", "BACKUPS", "CLOUD_INIT"]
+}
