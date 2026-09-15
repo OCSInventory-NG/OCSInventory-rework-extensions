@@ -1,0 +1,7 @@
+{
+    "name": "Proxmox API",
+    "version": "1.0.0",
+    "author": "OCS Inventory Team",
+    "description": "Proxmox API integration for hypervisor inventory management",
+    "django_app": "proxmoxapi"
+}
