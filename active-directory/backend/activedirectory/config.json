@@ -1,0 +1,5 @@
+{
+    "page_size": 500,
+    "connect_timeout_seconds": 10,
+    "search_timeout_seconds": 120
+}
