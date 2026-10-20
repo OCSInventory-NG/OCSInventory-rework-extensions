@@ -63,7 +63,7 @@
         "computers_title": "Active Directory computers",
         "all_domains": "All",
         "domain_name": "Domain",
-        "name": "Name",
+        "name": "AD Name",
         "in_directory_label": "Domain status",
         "in_directory_present": "Active",
         "in_directory_removed": "Removed",
