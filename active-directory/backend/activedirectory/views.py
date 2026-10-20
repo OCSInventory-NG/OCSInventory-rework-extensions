@@ -2,7 +2,7 @@ import django_filters
 from asset.inventory_base.models import InventoryBase
 from django.core.management import call_command
 from permission.permissions import DefaultModelPermissions
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import DjangoModelPermissions
@@ -61,7 +61,20 @@ class ADComputerFilterSet(django_filters.FilterSet):
         fields = ["domain", "asset", "match_status", "in_directory", "ou"]
 
 
-class ADComputerViewSet(viewsets.ReadOnlyModelViewSet):
+class ADComputerViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Read-only plus delete: rows only ever come from a sync (no create/update
+    through the API), but a row for a computer no longer in the directory
+    (in_directory=False) can be removed by hand. A later sync recreates it
+    if the object still exists in AD, so deleting is never destructive of
+    directory data - it only clears OCS Inventory's local record.
+    """
+
     permission_classes = [DefaultModelPermissions]
     queryset = ADComputer.objects.select_related("domain", "asset").all()
     serializer_class = ADComputerSerializer

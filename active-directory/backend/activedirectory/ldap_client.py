@@ -56,14 +56,24 @@ def connect(domain):
     Raises LDAPConnectionError with a human readable message on failure.
     """
     try:
+        if domain.security in ("starttls", "ldaps"):
+            # OPT_X_TLS_* must be set globally (module level) before
+            # initialize(), not on the connection instance: OpenLDAP builds
+            # its TLS context from the global options at initialize() time,
+            # so a later conn.set_option(OPT_X_TLS_REQUIRE_CERT, ...) is
+            # silently ignored and TLS negotiation fails with an opaque
+            # "CONNECT_ERROR: (unknown error code)". OPT_X_TLS_NEWCTX forces
+            # a fresh context to actually pick up the change.
+            ldap.set_option(
+                ldap.OPT_X_TLS_REQUIRE_CERT,
+                ldap.OPT_X_TLS_DEMAND if domain.verify_certificate else ldap.OPT_X_TLS_NEVER,
+            )
+            ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
+
         conn = ldap.initialize(_server_uri(domain))
         conn.set_option(ldap.OPT_REFERRALS, 0)
         conn.set_option(ldap.OPT_NETWORK_TIMEOUT, _CONFIG["connect_timeout_seconds"])
         conn.set_option(ldap.OPT_TIMEOUT, _CONFIG["search_timeout_seconds"])
-        conn.set_option(
-            ldap.OPT_X_TLS_REQUIRE_CERT,
-            ldap.OPT_X_TLS_DEMAND if domain.verify_certificate else ldap.OPT_X_TLS_NEVER,
-        )
 
         if domain.security == "starttls":
             conn.start_tls_s()
@@ -75,10 +85,33 @@ def connect(domain):
 
 
 def _format_ldap_error(exc):
+    """
+    Build a diagnosable message from an ldap.LDAPError.
+
+    python-ldap errors are inconsistent: most carry a {'desc': ..., 'info': ...}
+    dict as exc.args[0], but some (e.g. low level TLS/socket failures) carry a
+    plain (errno, message) tuple whose message alone ("Error") says nothing.
+    The exception class name is always included so the real cause (e.g.
+    SERVER_DOWN, INVALID_CREDENTIALS) is never lost even when the text isn't.
+    """
+    kind = type(exc).__name__
     if exc.args and isinstance(exc.args[0], dict):
         info = exc.args[0]
-        return info.get("desc") or info.get("info") or str(exc)
-    return str(exc)
+        parts = [info.get("desc"), info.get("info")]
+        detail = ": ".join(p for p in parts if p)
+        if not detail:
+            detail = repr(info)
+        return f"{kind}: {detail}"
+
+    # Not the usual {'desc': ..., 'info': ...} dict: str(exc) on a multi-arg
+    # exception stringifies the whole args tuple (e.g. "(0, 'Error')"), which
+    # is as unhelpful as the bare message. Pull the last argument instead,
+    # since that's where plain (errno, message)-style exceptions put the text.
+    if exc.args:
+        detail = str(exc.args[-1])
+    else:
+        detail = str(exc) or "no further detail available"
+    return f"{kind}: {detail}"
 
 
 def test_connection(domain):

@@ -8,8 +8,10 @@ from automation.rule.context import get_resolver_for_trigger
 from django.urls import clear_url_caches
 from extension.models import Extension
 
+import ldap
+
 from .apps import ADEnrichedInventoryReceivedResolver
-from .ldap_client import LDAPConnectionError
+from .ldap_client import LDAPConnectionError, _format_ldap_error
 from .matching import match_status_for, normalize
 from .models import ADComputer, ADDomain, SyncReport
 
@@ -212,6 +214,36 @@ class TestADComputerAPI:
         )
         assert response.status_code == 405
 
+    def test_update_not_allowed(self, make_api_client, computer):
+        client = make_api_client("change_adcomputer")
+        response = client.patch(
+            f"/activedirectory/computers/{computer.id}/", {"name": "RENAMED"}, format="json"
+        )
+        assert response.status_code == 405
+
+    def test_delete_requires_permission(self, make_api_client, computer):
+        client = make_api_client("view_adcomputer")
+        response = client.delete(f"/activedirectory/computers/{computer.id}/")
+        assert response.status_code == 403
+        assert ADComputer.objects.filter(id=computer.id).exists()
+
+    def test_delete(self, make_api_client, computer):
+        client = make_api_client("delete_adcomputer")
+        response = client.delete(f"/activedirectory/computers/{computer.id}/")
+        assert response.status_code == 204
+        assert not ADComputer.objects.filter(id=computer.id).exists()
+
+    def test_delete_does_not_touch_the_linked_asset(self, make_api_client, computer, asset):
+        computer.asset = asset
+        computer.link_mode = "manual"
+        computer.match_status = "linked"
+        computer.save()
+
+        client = make_api_client("delete_adcomputer")
+        response = client.delete(f"/activedirectory/computers/{computer.id}/")
+        assert response.status_code == 204
+        assert InventoryBase.objects.filter(id=asset.id).exists()
+
     def test_filter_by_match_status(self, make_api_client, computer):
         computer.match_status = "ambiguous"
         computer.save()
@@ -288,6 +320,27 @@ class TestSyncReportAPI:
             "/activedirectory/reports/", {"domain": domain.id}, format="json"
         )
         assert response.status_code == 405
+
+
+# --- LDAP error formatting -------------------------------------------------
+
+class TestFormatLdapError:
+    def test_dict_shaped_error_uses_desc_and_info(self):
+        exc = ldap.SERVER_DOWN({"desc": "Can't contact LDAP server", "info": "timeout"})
+        assert _format_ldap_error(exc) == "SERVER_DOWN: Can't contact LDAP server: timeout"
+
+    def test_dict_shaped_error_without_desc_or_info_keeps_exception_type(self):
+        exc = ldap.OPERATIONS_ERROR({"result": -1})
+        assert _format_ldap_error(exc).startswith("OPERATIONS_ERROR")
+
+    def test_plain_tuple_error_is_not_just_the_bare_message(self):
+        # Reproduces the unhelpful "(0, 'Error')" seen in production logs:
+        # some python-ldap errors carry a plain tuple instead of the usual
+        # {'desc': ..., 'info': ...} dict, so the bare str(exc) is just "Error".
+        exc = ldap.LDAPError(0, "Error")
+        message = _format_ldap_error(exc)
+        assert message == "LDAPError: Error"
+        assert message != "Error"
 
 
 # --- Matching ------------------------------------------------------------

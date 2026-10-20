@@ -126,6 +126,7 @@ See the functional specification for the full contract
 | POST | `/activedirectory/domains/{id}/sync/` | Trigger a synchronization (409 if already running) |
 | GET | `/activedirectory/computers/` | List computers (filter/search) |
 | GET | `/activedirectory/computers/{id}/` | Retrieve a computer |
+| DELETE | `/activedirectory/computers/{id}/` | Remove the local record (e.g. for a computer no longer in the directory); a later sync recreates it if the object still exists in AD |
 | POST | `/activedirectory/computers/{id}/link/` | Manually link to an asset |
 | POST | `/activedirectory/computers/{id}/unlink/` | Remove the link |
 | GET | `/activedirectory/reports/` | List sync reports (filter by `domain`) |
