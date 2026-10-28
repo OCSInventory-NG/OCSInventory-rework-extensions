@@ -56,24 +56,23 @@ def connect(domain):
     Raises LDAPConnectionError with a human readable message on failure.
     """
     try:
-        if domain.security in ("starttls", "ldaps"):
-            # OPT_X_TLS_* must be set globally (module level) before
-            # initialize(), not on the connection instance: OpenLDAP builds
-            # its TLS context from the global options at initialize() time,
-            # so a later conn.set_option(OPT_X_TLS_REQUIRE_CERT, ...) is
-            # silently ignored and TLS negotiation fails with an opaque
-            # "CONNECT_ERROR: (unknown error code)". OPT_X_TLS_NEWCTX forces
-            # a fresh context to actually pick up the change.
-            ldap.set_option(
-                ldap.OPT_X_TLS_REQUIRE_CERT,
-                ldap.OPT_X_TLS_DEMAND if domain.verify_certificate else ldap.OPT_X_TLS_NEVER,
-            )
-            ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
-
         conn = ldap.initialize(_server_uri(domain))
         conn.set_option(ldap.OPT_REFERRALS, 0)
         conn.set_option(ldap.OPT_NETWORK_TIMEOUT, _CONFIG["connect_timeout_seconds"])
         conn.set_option(ldap.OPT_TIMEOUT, _CONFIG["search_timeout_seconds"])
+
+        if domain.security in ("starttls", "ldaps"):
+            # Set on the connection itself, not via the module-level
+            # ldap.set_option(): that would change TLS behavior for every
+            # other LDAP connection in this worker process, including the
+            # core's own LDAP auth backend. OPT_X_TLS_NEWCTX forces this
+            # connection to actually rebuild its TLS context from the option
+            # above before the handshake, instead of using a stale one.
+            conn.set_option(
+                ldap.OPT_X_TLS_REQUIRE_CERT,
+                ldap.OPT_X_TLS_DEMAND if domain.verify_certificate else ldap.OPT_X_TLS_NEVER,
+            )
+            conn.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
 
         if domain.security == "starttls":
             conn.start_tls_s()
@@ -235,7 +234,11 @@ def resolve_assigned_user(domain, conn, user_dn):
     if not user_dn:
         return "", "", ""
     try:
-        _rtype, results = conn.search_s(
+        # search_s() returns the result list directly, not a (rtype, results)
+        # tuple like result3() does: unpacking it as a tuple raised a bare
+        # ValueError on every computer with a resolvable managedBy, which
+        # upsert_computer() never caught (only ldap.LDAPError was handled).
+        results = conn.search_s(
             user_dn,
             ldap.SCOPE_BASE,
             "(objectClass=user)",

@@ -65,6 +65,7 @@ class ADComputer(models.Model):
     LINK_MODE_CHOICES = (
         ("auto", "Automatic"),
         ("manual", "Manual"),
+        ("manual_unlinked", "Manually unlinked"),
     )
 
     domain = models.ForeignKey(
@@ -98,7 +99,7 @@ class ADComputer(models.Model):
         related_name="ad_computer",
     )
     link_mode = models.CharField(
-        max_length=10, choices=LINK_MODE_CHOICES, blank=True, default=""
+        max_length=15, choices=LINK_MODE_CHOICES, blank=True, default=""
     )
     match_status = models.CharField(
         max_length=10, choices=MATCH_STATUS_CHOICES, default="unlinked"

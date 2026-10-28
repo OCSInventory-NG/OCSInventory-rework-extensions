@@ -1,17 +1,27 @@
+import logging
+import threading
+
 import django_filters
 from asset.inventory_base.models import InventoryBase
-from django.core.management import call_command
+from django.db import connections
 from permission.permissions import DefaultModelPermissions
-from rest_framework import mixins, status, viewsets
+from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import DjangoModelPermissions
 from rest_framework.response import Response
 
 from .ldap_client import test_connection
-from .management.commands.ad_sync import is_sync_running
+from .management.commands.ad_sync import start_sync_report, sync_domain
 from .models import ADComputer, ADDomain, SyncReport
-from .serializers import ADComputerSerializer, ADDomainSerializer, SyncReportSerializer
+from .serializers import (
+    ADComputerSerializer,
+    ADDomainSerializer,
+    ADDomainTestSerializer,
+    SyncReportSerializer,
+)
+
+logger = logging.getLogger("extensions.activedirectory")
 
 
 class RequireChangePermission(DjangoModelPermissions):
@@ -23,6 +33,43 @@ class RequireChangePermission(DjangoModelPermissions):
     perms_map = {method: ["%(app_label)s.change_%(model_name)s"] for method in DjangoModelPermissions.perms_map}
 
 
+class RequireAddOrChangePermission(DjangoModelPermissions):
+    """
+    Require add_<model> OR change_<model>: the non-detail test/ action is
+    used from the creation form (no domain saved yet, needs add_addomain)
+    as well as, potentially, an edit context.
+    """
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        model = self._queryset(view).model
+        app_label = model._meta.app_label
+        model_name = model._meta.model_name
+        return user.has_perm(f"{app_label}.add_{model_name}") or user.has_perm(
+            f"{app_label}.change_{model_name}"
+        )
+
+
+def _run_connection_test(payload, password_required):
+    serializer = ADDomainTestSerializer(data=payload)
+    serializer.is_valid(raise_exception=True)
+    if password_required and not serializer.validated_data.get("bind_password"):
+        raise serializers.ValidationError(
+            {"bind_password": "This field is required."}
+        )
+
+    # Never saved: connect() only reads these fields, it never persists
+    # the unvalidated/not-yet-confirmed candidate.
+    candidate = ADDomain(**serializer.validated_data)
+
+    ok, error = test_connection(candidate)
+    if ok:
+        return Response({"ok": True, "server": candidate.server})
+    return Response({"ok": False, "error": error})
+
+
 class ADDomainViewSet(viewsets.ModelViewSet):
     permission_classes = [DefaultModelPermissions]
     queryset = ADDomain.objects.all()
@@ -31,26 +78,61 @@ class ADDomainViewSet(viewsets.ModelViewSet):
     search_fields = ["name", "server", "base_dn"]
     ordering_fields = ["id", "name", "last_sync_at", "last_sync_status"]
 
-    @action(detail=True, methods=["post"], permission_classes=[RequireChangePermission])
-    def test(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path="test", permission_classes=[RequireChangePermission])
+    def test_existing(self, request, pk=None):
+        """
+        Test the connection using the submitted form fields (edit form),
+        not blindly the saved row: an admin must be able to try a server or
+        credential change before saving it. An empty/missing bind_password
+        falls back to the one already stored, same as a plain update.
+        """
         domain = self.get_object()
-        ok, error = test_connection(domain)
-        if ok:
-            return Response({"ok": True, "server": domain.server})
-        return Response({"ok": False, "error": error})
+        payload = dict(request.data)
+        if not payload.get("bind_password"):
+            payload["bind_password"] = domain.bind_password
+
+        return _run_connection_test(payload, password_required=False)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="test",
+        permission_classes=[RequireAddOrChangePermission],
+    )
+    def test_new(self, request):
+        """
+        Same as above, for the creation form: there is no saved domain yet,
+        so bind_password can't fall back to anything and is required.
+        """
+        return _run_connection_test(request.data, password_required=True)
 
     @action(detail=True, methods=["post"], permission_classes=[RequireChangePermission])
     def sync(self, request, pk=None):
         domain = self.get_object()
-        if is_sync_running(domain):
+        report = start_sync_report(domain)
+        if report is None:
             return Response(
                 {"detail": "A synchronization is already running for this domain."},
                 status=status.HTTP_409_CONFLICT,
             )
 
-        call_command("ad_sync", domain=domain.id)
-        report = SyncReport.objects.filter(domain=domain).order_by("-started_at").first()
-        return Response({"report": report.id if report else None}, status=status.HTTP_202_ACCEPTED)
+        # Run in the background: a sync can take well past nginx's 60s and
+        # uwsgi's ~300s timeouts on a large directory, which would otherwise
+        # either show the admin a spurious error while the sync keeps going,
+        # or get the worker killed mid-sync. The report was already created
+        # synchronously above, so is_sync_running() correctly rejects a
+        # concurrent request the moment this one returns.
+        def run():
+            try:
+                sync_domain(domain, report=report)
+            finally:
+                connections.close_all()
+
+        threading.Thread(
+            target=run, name=f"ad-sync-{domain.id}", daemon=True
+        ).start()
+
+        return Response({"report": report.id}, status=status.HTTP_202_ACCEPTED)
 
 
 class ADComputerFilterSet(django_filters.FilterSet):
@@ -58,7 +140,7 @@ class ADComputerFilterSet(django_filters.FilterSet):
 
     class Meta:
         model = ADComputer
-        fields = ["domain", "asset", "match_status", "in_directory", "ou"]
+        fields = ["domain", "asset", "match_status", "in_directory", "ou", "enabled"]
 
 
 class ADComputerViewSet(
@@ -86,6 +168,26 @@ class ADComputerViewSet(
     ]
     search_fields = ["name", "dns_hostname", "assigned_user_name", "assigned_user_login"]
     ordering_fields = ["id", "name", "ou", "match_status", "last_seen_at"]
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """
+        Aggregate counts for the computer list, so a server-paginated list
+        doesn't need every row loaded client side to show totals/filters.
+        Accepts the same ?domain= filter as the list endpoint.
+        """
+        queryset = ADComputer.objects.all()
+        domain_id = request.query_params.get("domain")
+        if domain_id:
+            queryset = queryset.filter(domain_id=domain_id)
+
+        return Response({
+            "total": queryset.count(),
+            "linked": queryset.filter(match_status="linked").count(),
+            "unlinked": queryset.filter(match_status="unlinked").count(),
+            "ambiguous": queryset.filter(match_status="ambiguous").count(),
+            "removed": queryset.filter(in_directory=False).count(),
+        })
 
     @action(detail=True, methods=["post"], permission_classes=[RequireChangePermission])
     def link(self, request, pk=None):
@@ -120,7 +222,10 @@ class ADComputerViewSet(
     def unlink(self, request, pk=None):
         computer = self.get_object()
         computer.asset = None
-        computer.link_mode = ""
+        # "manual_unlinked", not "": a plain sync must not silently relink
+        # this computer on its next run, the same way it would never
+        # overwrite a manual link.
+        computer.link_mode = "manual_unlinked"
         computer.match_status = "unlinked"
         computer.save(update_fields=["asset", "link_mode", "match_status"])
 

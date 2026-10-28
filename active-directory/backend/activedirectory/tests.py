@@ -1,11 +1,13 @@
 import importlib
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
 from asset.inventory_base.models import InventoryBase
 from automation.rule.context import get_resolver_for_trigger
 from django.urls import clear_url_caches
+from django.utils import timezone
 from extension.models import Extension
 
 import ldap
@@ -163,37 +165,132 @@ class TestADDomainAPI:
         assert not SyncReport.objects.filter(id=report.id).exists()
 
     @patch("extensions.activedirectory.views.test_connection")
-    def test_test_action_ok(self, mock_test, make_api_client, domain):
+    def test_test_action_ok_uses_stored_password_when_blank(self, mock_test, make_api_client, domain):
         mock_test.return_value = (True, None)
         client = make_api_client("change_addomain")
-        response = client.post(f"/activedirectory/domains/{domain.id}/test/")
+        response = client.post(
+            f"/activedirectory/domains/{domain.id}/test/",
+            {
+                "server": domain.server,
+                "bind_dn": domain.bind_dn,
+                "base_dn": domain.base_dn,
+            },
+            format="json",
+        )
         assert response.status_code == 200
         assert response.data == {"ok": True, "server": domain.server}
+        candidate = mock_test.call_args[0][0]
+        assert candidate.bind_password == domain.bind_password
+
+    @patch("extensions.activedirectory.views.test_connection")
+    def test_test_action_uses_submitted_fields_not_the_saved_row(self, mock_test, make_api_client, domain):
+        mock_test.return_value = (True, None)
+        client = make_api_client("change_addomain")
+        response = client.post(
+            f"/activedirectory/domains/{domain.id}/test/",
+            {
+                "server": "other-server.corp.local",
+                "bind_dn": domain.bind_dn,
+                "bind_password": "newpwd",
+                "base_dn": domain.base_dn,
+            },
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data == {"ok": True, "server": "other-server.corp.local"}
+        candidate = mock_test.call_args[0][0]
+        assert candidate.bind_password == "newpwd"
+        # the stored domain itself must never be touched by a test
+        domain.refresh_from_db()
+        assert domain.server != "other-server.corp.local"
 
     @patch("extensions.activedirectory.views.test_connection")
     def test_test_action_failure(self, mock_test, make_api_client, domain):
         mock_test.return_value = (False, "Invalid credentials")
         client = make_api_client("change_addomain")
-        response = client.post(f"/activedirectory/domains/{domain.id}/test/")
+        response = client.post(
+            f"/activedirectory/domains/{domain.id}/test/",
+            {"server": domain.server, "bind_dn": domain.bind_dn, "base_dn": domain.base_dn},
+            format="json",
+        )
         assert response.status_code == 200
         assert response.data == {"ok": False, "error": "Invalid credentials"}
 
-    @patch("extensions.activedirectory.views.call_command")
-    def test_sync_action_returns_report(self, mock_call_command, make_api_client, domain):
-        def fake_sync(name, domain=None):
-            SyncReport.objects.create(domain_id=domain, status="success")
+    @patch("extensions.activedirectory.views.test_connection")
+    def test_test_action_requires_add_or_change_permission_on_creation_form(self, mock_test, make_api_client):
+        mock_test.return_value = (True, None)
+        client = make_api_client("view_addomain")
+        response = client.post(
+            "/activedirectory/domains/test/",
+            {"server": "x", "bind_dn": "x", "bind_password": "x", "base_dn": "x"},
+            format="json",
+        )
+        assert response.status_code == 403
 
-        mock_call_command.side_effect = fake_sync
+    @patch("extensions.activedirectory.views.test_connection")
+    def test_test_action_on_creation_form_requires_password(self, mock_test, make_api_client):
+        client = make_api_client("add_addomain")
+        response = client.post(
+            "/activedirectory/domains/test/",
+            {"server": "x", "bind_dn": "x", "base_dn": "x"},
+            format="json",
+        )
+        assert response.status_code == 400
+
+    @patch("extensions.activedirectory.views.test_connection")
+    def test_test_action_on_creation_form(self, mock_test, make_api_client):
+        mock_test.return_value = (True, None)
+        client = make_api_client("add_addomain")
+        response = client.post(
+            "/activedirectory/domains/test/",
+            {
+                "server": "new-dc.corp.local",
+                "bind_dn": "svc@corp.local",
+                "bind_password": "pwd",
+                "base_dn": "DC=corp,DC=local",
+            },
+            format="json",
+        )
+        assert response.status_code == 200
+        assert response.data == {"ok": True, "server": "new-dc.corp.local"}
+
+    @patch("extensions.activedirectory.views.sync_domain")
+    def test_sync_action_returns_report_and_runs_in_background(self, mock_sync_domain, make_api_client, domain):
         client = make_api_client("change_addomain")
         response = client.post(f"/activedirectory/domains/{domain.id}/sync/")
         assert response.status_code == 202
-        assert response.data["report"] is not None
+        report_id = response.data["report"]
+        assert report_id is not None
+        assert SyncReport.objects.get(id=report_id).status == "running"
+
+        # the view must hand off to a background thread, not block the request
+        for _ in range(50):
+            if mock_sync_domain.called:
+                break
+            time.sleep(0.05)
+        assert mock_sync_domain.called
+        called_domain, kwargs = mock_sync_domain.call_args[0][0], mock_sync_domain.call_args[1]
+        assert called_domain.id == domain.id
+        assert kwargs["report"].id == report_id
 
     def test_sync_action_conflict_when_running(self, make_api_client, domain):
         SyncReport.objects.create(domain=domain, status="running")
         client = make_api_client("change_addomain")
         response = client.post(f"/activedirectory/domains/{domain.id}/sync/")
         assert response.status_code == 409
+
+    def test_sync_action_conflict_is_race_free(self, make_api_client, domain):
+        """
+        Two concurrent sync requests must not both create a running report:
+        start_sync_report() locks the domain row for its check-then-create.
+        """
+        from extensions.activedirectory.management.commands.ad_sync import start_sync_report
+
+        first = start_sync_report(domain)
+        assert first is not None
+        second = start_sync_report(domain)
+        assert second is None
+        assert SyncReport.objects.filter(domain=domain, status="running").count() == 1
 
 
 # --- Computers -----------------------------------------------------------
@@ -418,3 +515,307 @@ class TestInventoryReceivedContext:
         config._extend_inventory_received_context()
         resolver_after = get_resolver_for_trigger("inventory_received")
         assert resolver_before is resolver_after
+
+
+# --- ad_sync failure handling ----------------------------------------------
+
+def _entry(name, object_guid, **overrides):
+    base = {
+        "object_guid": object_guid,
+        "name": name,
+        "sam_account_name": f"{name}$",
+        "dns_hostname": f"{name.lower()}.corp.local",
+        "distinguished_name": f"CN={name},DC=corp,DC=local",
+        "ou": "DC=corp,DC=local",
+        "os_name": "Windows 11",
+        "os_version": "10.0",
+        "enabled": True,
+        "description": "",
+        "when_created": None,
+        "last_logon": None,
+        "password_last_set": None,
+        "assigned_user_raw": "",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestSyncDomainFailureHandling:
+    def test_non_ldap_exception_closes_the_report_as_error(self, domain, monkeypatch):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        def boom(_domain):
+            raise RuntimeError("totally unrelated bug")
+
+        monkeypatch.setattr(ad_sync, "connect", boom)
+
+        report = ad_sync.sync_domain(domain)
+
+        assert report.status == "error"
+        assert "totally unrelated bug" in report.error_message
+        domain.refresh_from_db()
+        assert domain.last_sync_status == "error"
+        assert domain.last_sync_at is not None
+
+    def test_a_closed_report_never_blocks_the_next_sync(self, domain, monkeypatch):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        monkeypatch.setattr(
+            ad_sync, "connect", lambda _domain: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        ad_sync.sync_domain(domain)
+
+        assert ad_sync.is_sync_running(domain) is False
+        assert ad_sync.start_sync_report(domain) is not None
+
+    def test_stale_running_report_is_closed_as_abandoned(self, domain):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        stale = SyncReport.objects.create(domain=domain, status="running")
+        SyncReport.objects.filter(id=stale.id).update(
+            started_at=timezone.now()
+            - timezone.timedelta(seconds=ad_sync.STALE_RUNNING_REPORT_SECONDS + 60)
+        )
+
+        assert ad_sync.is_sync_running(domain) is False
+
+        stale.refresh_from_db()
+        assert stale.status == "error"
+        assert "Abandoned" in stale.error_message
+
+    def test_recent_running_report_still_blocks(self, domain):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        SyncReport.objects.create(domain=domain, status="running")
+        assert ad_sync.is_sync_running(domain) is True
+
+    def test_same_computer_name_in_two_domains_does_not_crash_and_is_ambiguous(
+        self, domain, asset
+    ):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        other_domain = ADDomain.objects.create(
+            name="OTHERCORP",
+            server="dc2.othercorp.local",
+            bind_dn="svc@othercorp.local",
+            bind_password="pwd",
+            base_dn="DC=othercorp,DC=local",
+        )
+
+        entry = _entry(asset.name, "guid-domain1")
+        created, changed, linked = ad_sync.upsert_computer(domain, entry, conn=None)
+        assert linked is True
+
+        # same asset name, different domain: must not raise IntegrityError
+        other_entry = _entry(asset.name, "guid-domain2")
+        created2, changed2, linked2 = ad_sync.upsert_computer(other_domain, other_entry, conn=None)
+
+        assert linked2 is False
+        other_computer = ADComputer.objects.get(domain=other_domain, object_guid="guid-domain2")
+        assert other_computer.match_status == "ambiguous"
+        assert other_computer.asset is None
+
+        # the original link is untouched
+        first_computer = ADComputer.objects.get(domain=domain, object_guid="guid-domain1")
+        assert first_computer.asset_id == asset.id
+
+    def test_computer_recreated_with_new_guid_frees_the_stale_one(self, domain, asset):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        entry = _entry(asset.name, "guid-old")
+        ad_sync.upsert_computer(domain, entry, conn=None)
+        old_computer = ADComputer.objects.get(domain=domain, object_guid="guid-old")
+        assert old_computer.asset_id == asset.id
+
+        # the old object has disappeared from the directory by the time the
+        # new one (same name, new objectGUID) is processed
+        old_computer.in_directory = False
+        old_computer.save(update_fields=["in_directory"])
+
+        new_entry = _entry(asset.name, "guid-new")
+        created, changed, linked = ad_sync.upsert_computer(domain, new_entry, conn=None)
+
+        assert linked is True
+        new_computer = ADComputer.objects.get(domain=domain, object_guid="guid-new")
+        assert new_computer.asset_id == asset.id
+
+        old_computer.refresh_from_db()
+        assert old_computer.asset is None
+        assert old_computer.match_status == "unlinked"
+
+    def test_computer_recreated_with_new_guid_is_ambiguous_if_old_one_still_present(
+        self, domain, asset
+    ):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        entry = _entry(asset.name, "guid-old")
+        ad_sync.upsert_computer(domain, entry, conn=None)
+
+        # old object is still in the directory (not yet marked missing)
+        new_entry = _entry(asset.name, "guid-new")
+        created, changed, linked = ad_sync.upsert_computer(domain, new_entry, conn=None)
+
+        assert linked is False
+        new_computer = ADComputer.objects.get(domain=domain, object_guid="guid-new")
+        assert new_computer.match_status == "ambiguous"
+
+    def test_manually_linked_computer_is_never_relinked_by_a_sync(self, domain, asset):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        other_asset = InventoryBase.objects.create(
+            name="OTHERPC", osname="Linux", serial="SN2", uuid="uuid-other"
+        )
+        computer = ADComputer.objects.create(
+            domain=domain,
+            object_guid="guid-1",
+            name="OTHERPC",
+            distinguished_name="CN=OTHERPC,DC=corp,DC=local",
+            asset=other_asset,
+            link_mode="manual",
+            match_status="linked",
+        )
+
+        entry = _entry("RENAMEDPC", "guid-1")
+        ad_sync.upsert_computer(domain, entry, conn=None)
+
+        computer.refresh_from_db()
+        assert computer.asset_id == other_asset.id
+        assert computer.link_mode == "manual"
+
+    def test_manually_unlinked_computer_is_not_relinked_by_a_sync(self, domain, asset):
+        """
+        Reproduces the bug where unlink() set link_mode="", which the next
+        sync treated as "never evaluated" and relinked right away.
+        """
+        from extensions.activedirectory.management.commands import ad_sync
+
+        computer = ADComputer.objects.create(
+            domain=domain,
+            object_guid="guid-1",
+            name=asset.name,
+            distinguished_name=f"CN={asset.name},DC=corp,DC=local",
+            asset=None,
+            link_mode="manual_unlinked",
+            match_status="unlinked",
+        )
+
+        entry = _entry(asset.name, "guid-1")
+        ad_sync.upsert_computer(domain, entry, conn=None)
+
+        computer.refresh_from_db()
+        assert computer.asset is None
+        assert computer.link_mode == "manual_unlinked"
+        assert computer.match_status == "unlinked"
+
+    def test_one_failing_computer_does_not_abort_the_whole_sync(self, domain, asset, monkeypatch):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        good_entry = _entry(asset.name, "guid-good")
+        bad_entry = _entry("BROKEN", "guid-bad")
+
+        monkeypatch.setattr(
+            ad_sync, "iter_computers", lambda _domain: iter([bad_entry, good_entry])
+        )
+        monkeypatch.setattr(ad_sync, "connect", lambda _domain: _FakeConnection())
+
+        original_upsert = ad_sync.upsert_computer
+
+        def flaky_upsert(domain, entry, conn):
+            if entry["object_guid"] == "guid-bad":
+                raise RuntimeError("simulated failure for this one computer")
+            return original_upsert(domain, entry, conn)
+
+        monkeypatch.setattr(ad_sync, "upsert_computer", flaky_upsert)
+
+        report = ad_sync.sync_domain(domain)
+
+        assert report.status == "error"
+        assert "1 computer(s) failed" in report.error_message
+        assert ADComputer.objects.filter(domain=domain, object_guid="guid-good").exists()
+        assert not ADComputer.objects.filter(domain=domain, object_guid="guid-bad").exists()
+
+
+class _FakeConnection:
+    def unbind_s(self):
+        pass
+
+
+class TestResolveAssignedUserRealReturnShape:
+    def test_search_s_return_value_is_not_a_tuple(self, domain, monkeypatch):
+        """
+        Reproduces the bug where resolve_assigned_user() unpacked search_s()'s
+        return value as a (rtype, results) tuple: python-ldap's search_s()
+        returns the result list directly, so every computer with a
+        resolvable managedBy raised a bare ValueError that upsert_computer()
+        never caught (only ldap.LDAPError was handled).
+        """
+        from extensions.activedirectory.ldap_client import resolve_assigned_user
+
+        class FakeConn:
+            def search_s(self, base, scope, filterstr, attrlist):
+                return [("CN=Jane Doe,DC=corp,DC=local", {
+                    "cn": [b"Jane Doe"],
+                    "sAMAccountName": [b"jdoe"],
+                    "mail": [b"jdoe@corp.local"],
+                })]
+
+        name, login, email = resolve_assigned_user(domain, FakeConn(), "CN=Jane Doe,DC=corp,DC=local")
+        assert (name, login, email) == ("Jane Doe", "jdoe", "jdoe@corp.local")
+
+    def test_no_match_returns_empty_strings_without_raising(self, domain):
+        from extensions.activedirectory.ldap_client import resolve_assigned_user
+
+        class FakeConn:
+            def search_s(self, base, scope, filterstr, attrlist):
+                return []
+
+        assert resolve_assigned_user(domain, FakeConn(), "CN=Nobody,DC=corp,DC=local") == ("", "", "")
+
+    def test_ldap_error_is_caught(self, domain):
+        from extensions.activedirectory.ldap_client import resolve_assigned_user
+
+        class FakeConn:
+            def search_s(self, base, scope, filterstr, attrlist):
+                raise ldap.NO_SUCH_OBJECT({"desc": "No such object"})
+
+        assert resolve_assigned_user(domain, FakeConn(), "CN=Gone,DC=corp,DC=local") == ("", "", "")
+
+
+# --- TLS options are per-connection, not process-wide -----------------------
+
+class TestTlsOptionsScope:
+    def test_tls_options_are_set_on_the_connection_not_the_module(self, domain, monkeypatch):
+        """
+        Reproduces the bug where ldap.set_option() was called at module level:
+        testing/syncing one domain with verify_certificate=False would then
+        disable certificate verification for every other LDAP connection in
+        this worker process, including the core's own LDAP auth backend.
+        """
+        from extensions.activedirectory import ldap_client
+
+        module_level_calls = []
+        monkeypatch.setattr(ldap, "set_option", lambda *a: module_level_calls.append(a))
+
+        class FakeConn:
+            def __init__(self):
+                self.options = []
+
+            def set_option(self, *args):
+                self.options.append(args)
+
+            def start_tls_s(self):
+                pass
+
+            def simple_bind_s(self, dn, password):
+                pass
+
+        fake_conn = FakeConn()
+        monkeypatch.setattr(ldap, "initialize", lambda uri: fake_conn)
+
+        domain.security = "starttls"
+        domain.verify_certificate = False
+        ldap_client.connect(domain)
+
+        assert module_level_calls == []
+        assert (ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_NEVER) in fake_conn.options
+        assert any(opt[0] == ldap.OPT_X_TLS_NEWCTX for opt in fake_conn.options)

@@ -122,9 +122,11 @@ See the functional specification for the full contract
 |---|---|---|
 | GET/POST | `/activedirectory/domains/` | List / create domains |
 | GET/PUT/PATCH/DELETE | `/activedirectory/domains/{id}/` | Retrieve / update / delete a domain |
-| POST | `/activedirectory/domains/{id}/test/` | Test the LDAP connection |
-| POST | `/activedirectory/domains/{id}/sync/` | Trigger a synchronization (409 if already running) |
-| GET | `/activedirectory/computers/` | List computers (filter/search) |
+| POST | `/activedirectory/domains/test/` | Test connection settings from the creation form (not yet saved); requires `add_addomain` or `change_addomain` |
+| POST | `/activedirectory/domains/{id}/test/` | Test connection settings from the edit form; an empty/missing `bind_password` falls back to the one already stored |
+| POST | `/activedirectory/domains/{id}/sync/` | Trigger a synchronization in the background, returns immediately (409 if already running) |
+| GET | `/activedirectory/computers/` | List computers (filter/search; `?domain=`, `?asset=`, `?match_status=`, `?in_directory=`, `?enabled=`, `?ou=`) |
+| GET | `/activedirectory/computers/stats/` | Aggregate counts (`total`, `linked`, `unlinked`, `ambiguous`, `removed`); accepts `?domain=` |
 | GET | `/activedirectory/computers/{id}/` | Retrieve a computer |
 | DELETE | `/activedirectory/computers/{id}/` | Remove the local record (e.g. for a computer no longer in the directory); a later sync recreates it if the object still exists in AD |
 | POST | `/activedirectory/computers/{id}/link/` | Manually link to an asset |

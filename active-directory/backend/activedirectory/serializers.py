@@ -68,6 +68,22 @@ class ADDomainSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class ADDomainTestSerializer(serializers.Serializer):
+    """
+    Validates the connection fields sent to test/, which may describe a
+    domain not yet saved (creation form) or override some fields of an
+    existing one (edit form) rather than always testing the stored row.
+    """
+
+    server = serializers.CharField()
+    port = serializers.IntegerField(min_value=1, max_value=65535, default=636)
+    security = serializers.ChoiceField(choices=ADDomain.SECURITY_CHOICES, default="ldaps")
+    verify_certificate = serializers.BooleanField(default=True)
+    bind_dn = serializers.CharField()
+    bind_password = serializers.CharField(required=False, allow_blank=True, default="")
+    base_dn = serializers.CharField()
+
+
 class AssignedUserSerializer(serializers.Serializer):
     raw = serializers.CharField()
     name = serializers.CharField()
