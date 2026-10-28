@@ -2,6 +2,10 @@ export function createComponent(api) {
 	const Alert = api.getComponent("Alert")
 	const Loader = api.getComponent("Loader")
 
+	// Fields the test endpoints read from the form; on edit an empty password
+	// falls back to the stored one server-side.
+	const TEST_FIELDS = ["server", "port", "security", "verify_certificate", "bind_dn", "bind_password", "base_dn"]
+
 	const emptyRow = () => ({
 		name: "",
 		server: "",
@@ -112,17 +116,20 @@ export function createComponent(api) {
 
 			async testConnection() {
 				const id = this.isEditMode ? (this.row.id || this.id) : null
+				const url = id ? `/activedirectory/domains/${id}/test/` : "/activedirectory/domains/test/"
+				const payload = Object.fromEntries(TEST_FIELDS.map((field) => [field, this.row[field]]))
 				this.testing = true
 				this.testResult = null
 				try {
-					if (id) {
-						const { data } = await api.http.post(`/activedirectory/domains/${id}/test/`)
-						this.testResult = data
-					} else {
-						this.testResult = { ok: false, error: this.$t("activedirectory.save_before_test") }
-					}
+					const { data } = await api.http.post(url, payload)
+					this.testResult = data
 				} catch (e) {
-					this.testResult = { ok: false, error: e.response?.data?.error || e.message }
+					this.testResult = {
+						ok: false,
+						error: e.response?.data?.error
+							|| (e.response?.data && JSON.stringify(e.response.data))
+							|| e.message,
+					}
 				} finally {
 					this.testing = false
 				}
@@ -318,7 +325,6 @@ export function createComponent(api) {
 
                         <div class="d-flex justify-content-center gap-2">
                             <b-button
-                                v-if="isEditMode"
                                 variant="secondary"
                                 :disabled="testing"
                                 type="button"

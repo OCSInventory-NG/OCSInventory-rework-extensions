@@ -8,10 +8,27 @@ export async function createComponent(api) {
 
 	const LINK_MODE_VARIANTS = { auto: "info", manual: "purple" }
 	const MATCH_VARIANTS = { unlinked: "secondary", ambiguous: "warning" }
+	// Datatable sort keys that map to a backend ordering field; the other
+	// computed columns cannot be sorted server-side.
+	const ORDERING_FIELDS = { name: "name", ou: "ou", match_status_label: "match_status" }
+	const NON_SORTABLE_FIELDS = ["domain_name", "in_directory_label", "assigned_user_label", "enabled_label", "asset_name"]
+	const DEFAULT_ORDERING = "name"
+	const STATUS_FILTERS = { active: "true", inactive: "false" }
+	const EXPORT_PAGE_SIZE = 500
 
-	// Shared stats + filters + table block, rendered once per tab (one per
-	// domain plus "all") so each b-tab carries real content instead of an
-	// empty pane - b-tabs still reserves the content area otherwise.
+	const emptyStats = () => ({ total: 0, linked: 0, unlinked: 0, ambiguous: 0, removed: 0 })
+
+	const toApiOrdering = (ordering) => {
+		if (!ordering) return DEFAULT_ORDERING
+		const desc = ordering.startsWith("-")
+		const field = ORDERING_FIELDS[desc ? ordering.slice(1) : ordering]
+		if (!field) return DEFAULT_ORDERING
+		return desc ? `-${field}` : field
+	}
+
+	// Shared stats + filters + table block, rendered inside the active tab
+	// (one tab per domain plus "all") so the b-tab carries real content
+	// instead of an empty pane - b-tabs still reserves the content area otherwise.
 	const ADComputersContent = {
 		name: "ADComputersContent",
 		components: { Datatable, ADLinkModal },
@@ -20,12 +37,16 @@ export async function createComponent(api) {
 			stats: { type: Object, required: true },
 			rowdata: { type: Array, required: true },
 			rowheader: { type: Array, required: true },
+			total: { type: Number, required: true },
 			isbusy: { type: Boolean, required: true },
 			canchange: { type: Boolean, required: true },
 			candelete: { type: Boolean, required: true },
 			statusFilter: { type: String, required: true },
 		},
-		emits: ["update:statusFilter", "reload-datatable", "unlink"],
+		data() {
+			return { nonSortableFields: NON_SORTABLE_FIELDS }
+		},
+		emits: ["update:statusFilter", "reload-datatable", "change-query", "export", "export-all", "unlink"],
 		template: `
 			<div>
 				<div class="row row-deck row-cards mb-4 mt-3">
@@ -90,7 +111,10 @@ export async function createComponent(api) {
 					</div>
 				</div>
 
+				<!-- Keyed on the status filter so a filter change remounts the
+				     table on page 1, in step with the parent's reset query. -->
 				<Datatable
+					:key="statusFilter"
 					id="activedirectory-computers-datatable"
 					:rowdata="rowdata"
 					:rowheader="rowheader"
@@ -102,8 +126,14 @@ export async function createComponent(api) {
 					:candeletemultiple="false"
 					:canedit="false"
 					:hascustomactions="canchange"
+					:nonsortablefields="nonSortableFields"
+					:server-side="true"
+					:server-total-rows="total"
 					sortby="name"
 					@reload-datatable="$emit('reload-datatable')"
+					@change-query="$emit('change-query', $event)"
+					@export="$emit('export', $event)"
+					@export-all="$emit('export-all', $event)"
 				>
 					<template v-slot:cell(firstActions)="slotProps">
 						<template v-if="canchange">
@@ -139,6 +169,15 @@ export async function createComponent(api) {
 				isbusy: false,
 				domains: [],
 				computers: [],
+				total: 0,
+				stats: emptyStats(),
+				query: {
+					limit: Number(localStorage.getItem("perPage")) || 5,
+					offset: 0,
+					ordering: DEFAULT_ORDERING,
+					search: null,
+				},
+				requestId: 0,
 				activeDomainId: "all",
 				statusFilter: "all",
 				rowheader: [
@@ -172,64 +211,38 @@ export async function createComponent(api) {
 				},
 			},
 
-			filteredComputers() {
-				let rows = this.computers
-				if (this.activeDomainId !== "all") {
-					rows = rows.filter((c) => c.domain === this.activeDomainId)
+			// Filters sent to the API; "all" values are dropped by the generic service.
+			filterParams() {
+				return {
+					domain: this.activeDomainId === "all" ? null : this.activeDomainId,
+					enabled: STATUS_FILTERS[this.statusFilter] ?? null,
 				}
-				if (this.statusFilter === "active") {
-					rows = rows.filter((c) => c.enabled)
-				} else if (this.statusFilter === "inactive") {
-					rows = rows.filter((c) => !c.enabled)
-				}
-				return rows
 			},
 
 			rowdata() {
-				return this.filteredComputers.map((c) => {
-					const cellLinks = {}
-					if (c.asset && c.asset_name) {
-						cellLinks.asset_name = { href: api.withBase(`inventory/asset/${c.asset}`), label: c.asset_name }
-					}
-					return {
-						...c,
-						ou: c.ou_path || c.ou || "-",
-						in_directory_label: c.in_directory
-							? this.$t("activedirectory.in_directory_present")
-							: this.$t("activedirectory.in_directory_removed"),
-						__in_directory_label_variant: c.in_directory ? "success" : "danger",
-						assigned_user_label: c.assigned_user?.name || c.assigned_user?.login || "-",
-						enabled_label: c.enabled ? this.$t("generic.yes") : this.$t("generic.no"),
-						__enabled_label_variant: c.enabled ? "success" : "secondary",
-						asset_name: c.asset_name || "-",
-						__cellLinks: cellLinks,
-						match_status_label: c.match_status === "linked"
-							? this.$t(`activedirectory.link_mode_${c.link_mode || "auto"}`)
-							: this.$t(`activedirectory.match_status_${c.match_status}`),
-						__match_status_label_variant: c.match_status === "linked"
-							? (LINK_MODE_VARIANTS[c.link_mode] || "info")
-							: (MATCH_VARIANTS[c.match_status] || "secondary"),
-					}
-				})
+				return this.computers.map((c) => this.toRow(c))
 			},
 
-			stats() {
-				const rows = this.activeDomainId === "all"
-					? this.computers
-					: this.computers.filter((c) => c.domain === this.activeDomainId)
-				const inDirectory = rows.filter((c) => c.in_directory)
-				const linked = inDirectory.filter((c) => c.match_status === "linked")
-				const unlinked = inDirectory.filter((c) => c.match_status === "unlinked")
-				const ambiguous = inDirectory.filter((c) => c.match_status === "ambiguous")
-				const removed = rows.filter((c) => !c.in_directory)
+			statsView() {
+				const { total, linked } = this.stats
 				return {
-					total: inDirectory.length,
-					linked: linked.length,
-					linkedPct: inDirectory.length ? ((linked.length / inDirectory.length) * 100).toFixed(1) : "0",
-					unlinked: unlinked.length,
-					ambiguous: ambiguous.length,
-					removed: removed.length,
+					...this.stats,
+					linkedPct: total ? ((linked / total) * 100).toFixed(1) : "0",
 				}
+			},
+		},
+
+		watch: {
+			// The table remounts on tab/status change (see template), so its
+			// page, search and sort are back to defaults: mirror that here.
+			activeDomainId() {
+				this.resetQuery()
+				this.fetchComputers()
+				this.fetchStats()
+			},
+			statusFilter() {
+				this.resetQuery()
+				this.fetchComputers()
 			},
 		},
 
@@ -248,10 +261,42 @@ export async function createComponent(api) {
 				}
 			},
 
+			toRow(c) {
+				const cellLinks = {}
+				if (c.asset && c.asset_name) {
+					cellLinks.asset_name = { href: api.withBase(`inventory/asset/${c.asset}`), label: c.asset_name }
+				}
+				const linked = c.match_status === "linked"
+				const manuallyUnlinked = !linked && c.link_mode === "manual_unlinked"
+				return {
+					...c,
+					ou: c.ou_path || c.ou || "-",
+					in_directory_label: c.in_directory
+						? this.$t("activedirectory.in_directory_present")
+						: this.$t("activedirectory.in_directory_removed"),
+					__in_directory_label_variant: c.in_directory ? "success" : "danger",
+					assigned_user_label: c.assigned_user?.name || c.assigned_user?.login || "-",
+					enabled_label: c.enabled ? this.$t("generic.yes") : this.$t("generic.no"),
+					__enabled_label_variant: c.enabled ? "success" : "secondary",
+					asset_name: c.asset_name || "-",
+					__cellLinks: cellLinks,
+					match_status_label: linked || manuallyUnlinked
+						? this.$t(`activedirectory.link_mode_${c.link_mode || "auto"}`)
+						: this.$t(`activedirectory.match_status_${c.match_status}`),
+					__match_status_label_variant: linked
+						? (LINK_MODE_VARIANTS[c.link_mode] || "info")
+						: (MATCH_VARIANTS[c.match_status] || "secondary"),
+				}
+			},
+
+			resetQuery() {
+				this.query = { ...this.query, offset: 0, ordering: DEFAULT_ORDERING, search: null }
+			},
+
 			async load() {
 				this.loading = true
 				try {
-					await Promise.all([this.fetchDomains(), this.fetchComputers()])
+					await Promise.all([this.fetchDomains(), this.fetchComputers(), this.fetchStats()])
 				} finally {
 					this.loading = false
 				}
@@ -263,22 +308,93 @@ export async function createComponent(api) {
 			},
 
 			async fetchComputers() {
+				// Tab/filter switches can overlap: only the latest request may
+				// write the table.
+				const requestId = ++this.requestId
 				this.isbusy = true
 				this.errored = false
 				this.errormsg = null
 				try {
-					const response = await this.$api.generic.get("/activedirectory/computers/", { limit: 2000 })
+					const { limit, offset, ordering, search } = this.query
+					const response = await this.$api.generic.get(
+						"/activedirectory/computers/",
+						{ limit, offset, ordering, search },
+						this.filterParams,
+					)
+					if (requestId !== this.requestId) return
 					this.computers = response?.results ?? response ?? []
+					this.total = typeof response?.count === "number" ? response.count : this.computers.length
 				} catch (e) {
+					if (requestId !== this.requestId) return
 					this.errormsg = e.message
 					this.errored = true
 				} finally {
-					this.isbusy = false
+					if (requestId === this.requestId) this.isbusy = false
+				}
+			},
+
+			async fetchStats() {
+				try {
+					const response = await this.$api.generic.get("/activedirectory/computers/stats/", {
+						domain: this.filterParams.domain,
+					})
+					this.stats = { ...emptyStats(), ...response }
+				} catch (e) {
+					this.errormsg = e.message
+					this.errored = true
 				}
 			},
 
 			async reloadDatatable() {
-				await this.fetchComputers()
+				await Promise.all([this.fetchComputers(), this.fetchStats()])
+			},
+
+			handleQueryChange(query) {
+				this.query = { ...this.query, ...query, ordering: toApiOrdering(query.ordering) }
+				this.fetchComputers()
+			},
+
+			exportRows(rows, scope) {
+				const columns = this.rowheader.filter((key) => key !== "actions")
+				const lines = [columns.join(";")]
+				rows.forEach((row) => {
+					lines.push(columns.map((key) => `"${String(row[key] ?? "").replace(/"/g, '""')}"`).join(";"))
+				})
+				const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" })
+				const url = URL.createObjectURL(blob)
+				const link = document.createElement("a")
+				link.href = url
+				link.setAttribute("download", `activedirectory_computers_${scope}.csv`)
+				document.body.appendChild(link)
+				link.click()
+				link.remove()
+				URL.revokeObjectURL(url)
+			},
+
+			handleExport({ scope, rows }) {
+				this.exportRows(rows, scope)
+			},
+
+			async handleExportAll({ filter, ordering }) {
+				try {
+					const computers = []
+					let offset = 0
+					for (;;) {
+						const response = await this.$api.generic.get(
+							"/activedirectory/computers/",
+							{ limit: EXPORT_PAGE_SIZE, offset, search: filter, ordering: toApiOrdering(ordering) },
+							this.filterParams,
+						)
+						const page = response?.results ?? response ?? []
+						computers.push(...page)
+						if (!response?.next || !page.length) break
+						offset += page.length
+					}
+					this.exportRows(computers.map((c) => this.toRow(c)), "all")
+				} catch (e) {
+					this.errormsg = e.message
+					this.errored = true
+				}
 			},
 
 			async unlinkComputer(computerId) {
@@ -303,53 +419,46 @@ export async function createComponent(api) {
 			<div id="activedirectory-computers" class="container-xl">
 				<PageHeader :page-title="$t('activedirectory.computers_title')" />
 				<div class="page-body">
-					<Alert v-if="errored" :message="errormsg" :cols="true" variant="danger" />
-
-					<div v-if="loading" class="ocs-loader">
-						<Loader />
-					</div>
-
-					<div v-else-if="canview" class="card">
+					<div class="card">
 						<div class="card-body">
+							<Alert v-if="errored" :message="errormsg" :cols="true" variant="danger" />
+
+							<div v-if="loading" class="ocs-loader">
+								<Loader />
+							</div>
+
 							<b-tabs
+								v-else-if="canview"
 								v-model="activeTabIndex"
 								vertical
 								pills
 								card
 								content-class="col-10 sticky-tabs"
 							>
-								<b-tab :title="$t('activedirectory.all_domains')" title-item-class="ocs-menu-tab">
-									<ADComputersContent
-										:domain-count="domains.length"
-										:stats="stats"
-										:rowdata="rowdata"
-										:rowheader="rowheader"
-										:isbusy="isbusy"
-										:canchange="canchange"
-										:candelete="candelete"
-										:status-filter="statusFilter"
-										@update:statusFilter="statusFilter = $event"
-										@reload-datatable="reloadDatatable"
-										@unlink="unlinkComputer"
-									/>
-								</b-tab>
 								<b-tab
-									v-for="d in domains"
-									:key="d.id"
-									:title="d.name"
+									v-for="(tab, index) in [{ id: 'all', name: $t('activedirectory.all_domains') }, ...domains]"
+									:key="tab.id"
+									:title="tab.name"
 									title-item-class="ocs-menu-tab"
 								>
+									<!-- Only the active tab holds a table: switching tabs
+									     remounts it on page 1, matching the reset query. -->
 									<ADComputersContent
+										v-if="activeTabIndex === index"
 										:domain-count="domains.length"
-										:stats="stats"
+										:stats="statsView"
 										:rowdata="rowdata"
 										:rowheader="rowheader"
+										:total="total"
 										:isbusy="isbusy"
 										:canchange="canchange"
 										:candelete="candelete"
 										:status-filter="statusFilter"
 										@update:statusFilter="statusFilter = $event"
 										@reload-datatable="reloadDatatable"
+										@change-query="handleQueryChange"
+										@export="handleExport"
+										@export-all="handleExportAll"
 										@unlink="unlinkComputer"
 									/>
 								</b-tab>

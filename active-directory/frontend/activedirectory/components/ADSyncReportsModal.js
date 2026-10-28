@@ -1,7 +1,8 @@
-export function createComponent(api) {
+export async function createComponent(api) {
 	const Datatable = api.getComponent("Datatable")
 	const Alert = api.getComponent("Alert")
 	const Loader = api.getComponent("Loader")
+	const { startDomainSync, waitForReport } = await api.importModule("/extensions/activedirectory/components/adSync.js")
 
 	const STATUS_VARIANTS = { success: "success", error: "danger", running: "info" }
 
@@ -20,7 +21,7 @@ export function createComponent(api) {
 				isbusy: false,
 				syncing: false,
 				rowdata: [],
-				rowheader: ["started_at", "status", "created_count", "linked_count", "missing_count", "error_message"],
+				rowheader: ["started_at", "status", "created_count", "updated_count", "linked_count", "missing_count", "error_message"],
 				errored: false,
 				errormsg: null,
 			}
@@ -64,9 +65,14 @@ export function createComponent(api) {
 
 			async syncNow() {
 				this.syncing = true
+				this.errored = false
+				this.errormsg = null
 				try {
-					await api.http.post(`/activedirectory/domains/${this.domainId}/sync/`)
-					await this.load()
+					const reportId = await startDomainSync(api, this.domainId)
+					// Show the "running" row right away, then refresh once it ends.
+					await this.fetchReports()
+					if (reportId) await waitForReport(api, reportId)
+					await this.fetchReports()
 					this.$emit("reloadDatatable")
 				} catch (e) {
 					this.errormsg = e.response?.data?.detail || e.response?.data?.error || e.message

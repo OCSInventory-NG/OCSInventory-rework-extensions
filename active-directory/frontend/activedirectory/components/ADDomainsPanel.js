@@ -5,9 +5,11 @@ export async function createComponent(api) {
 	const ADDomainModalComp = await api.importModule("/extensions/activedirectory/components/ADDomainModal.js")
 	const ADDomainModal = ADDomainModalComp.createComponent(api)
 	const ADSyncReportsModalComp = await api.importModule("/extensions/activedirectory/components/ADSyncReportsModal.js")
-	const ADSyncReportsModal = ADSyncReportsModalComp.createComponent(api)
+	const ADSyncReportsModal = await ADSyncReportsModalComp.createComponent(api)
+	const { startDomainSync, waitForReport } = await api.importModule("/extensions/activedirectory/components/adSync.js")
 
 	const SECURITY_VARIANTS = { ldaps: "success", starttls: "info", none: "warning" }
+	const SYNC_STATUS_VARIANTS = { success: "success", error: "danger", running: "info" }
 
 	return {
 		name: "ADDomainsPanel",
@@ -26,6 +28,7 @@ export async function createComponent(api) {
 					"assigned_user_attribute",
 					"computers_count",
 					"last_sync_at",
+					"last_sync_status",
 					"is_active",
 					"actions",
 				],
@@ -79,6 +82,10 @@ export async function createComponent(api) {
 						last_sync_at: domain.last_sync_at
 							? new Date(domain.last_sync_at).toLocaleString(this.$i18n.locale)
 							: "",
+						__last_sync_status_variant: SYNC_STATUS_VARIANTS[domain.last_sync_status] || "secondary",
+						last_sync_status: domain.last_sync_status
+							? this.$t(`activedirectory.sync_status_${domain.last_sync_status}`)
+							: "",
 						is_active: domain.is_active ? this.$t("generic.yes") : this.$t("generic.no"),
 					}))
 				} catch (e) {
@@ -106,9 +113,16 @@ export async function createComponent(api) {
 
 			async syncDomain(domainId) {
 				this.syncingId = domainId
+				this.errored = false
+				this.errormsg = null
 				try {
-					await api.http.post(`/activedirectory/domains/${domainId}/sync/`)
-					await this.load()
+					const reportId = await startDomainSync(api, domainId)
+					const report = reportId ? await waitForReport(api, reportId) : null
+					await this.fetchDomains()
+					if (report?.status === "error") {
+						this.errormsg = this.$t("activedirectory.sync_failed", { error: report.error_message })
+						this.errored = true
+					}
 				} catch (e) {
 					this.errormsg = e.response?.data?.detail || e.response?.data?.error || e.message
 					this.errored = true
@@ -147,7 +161,7 @@ export async function createComponent(api) {
 								:isbusy="isbusy"
 								title="activedirectory/domains"
 								translationkey="activedirectory."
-								:badgecells="['security']"
+								:badgecells="['security', 'last_sync_status']"
 								:candelete="candelete"
 								:candeletemultiple="false"
 								:hascustomactions="true"
