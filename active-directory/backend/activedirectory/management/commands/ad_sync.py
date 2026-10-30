@@ -94,17 +94,11 @@ def start_sync_report(domain):
         return SyncReport.objects.create(domain=domain, status="running")
 
 
-def sync_domain(domain, report=None):
-    """
-    Run one sync for domain, using report if already created (e.g. by the
-    API view, which creates it synchronously before handing off to a
-    background thread), or creating it here otherwise.
-    """
+def sync_domain(domain):
+    report = start_sync_report(domain)
     if report is None:
-        report = start_sync_report(domain)
-        if report is None:
-            logger.warning("Sync already running for domain %s, skipping.", domain.name)
-            return None
+        logger.warning("Sync already running for domain %s, skipping.", domain.name)
+        return None
 
     created = updated = linked = errors = 0
     seen_guids = set()

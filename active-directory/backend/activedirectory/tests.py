@@ -1,6 +1,5 @@
 import importlib
 import sys
-import time
 from unittest.mock import patch
 
 import pytest
@@ -254,44 +253,6 @@ class TestADDomainAPI:
         assert response.status_code == 200
         assert response.data == {"ok": True, "server": "new-dc.corp.local"}
 
-    @patch("extensions.activedirectory.views.sync_domain")
-    def test_sync_action_returns_report_and_runs_in_background(self, mock_sync_domain, make_api_client, domain):
-        client = make_api_client("change_addomain")
-        response = client.post(f"/activedirectory/domains/{domain.id}/sync/")
-        assert response.status_code == 202
-        report_id = response.data["report"]
-        assert report_id is not None
-        assert SyncReport.objects.get(id=report_id).status == "running"
-
-        # the view must hand off to a background thread, not block the request
-        for _ in range(50):
-            if mock_sync_domain.called:
-                break
-            time.sleep(0.05)
-        assert mock_sync_domain.called
-        called_domain, kwargs = mock_sync_domain.call_args[0][0], mock_sync_domain.call_args[1]
-        assert called_domain.id == domain.id
-        assert kwargs["report"].id == report_id
-
-    def test_sync_action_conflict_when_running(self, make_api_client, domain):
-        SyncReport.objects.create(domain=domain, status="running")
-        client = make_api_client("change_addomain")
-        response = client.post(f"/activedirectory/domains/{domain.id}/sync/")
-        assert response.status_code == 409
-
-    def test_sync_action_conflict_is_race_free(self, make_api_client, domain):
-        """
-        Two concurrent sync requests must not both create a running report:
-        start_sync_report() locks the domain row for its check-then-create.
-        """
-        from extensions.activedirectory.management.commands.ad_sync import start_sync_report
-
-        first = start_sync_report(domain)
-        assert first is not None
-        second = start_sync_report(domain)
-        assert second is None
-        assert SyncReport.objects.filter(domain=domain, status="running").count() == 1
-
 
 # --- Computers -----------------------------------------------------------
 
@@ -356,6 +317,22 @@ class TestADComputerAPI:
         client = make_api_client("view_adcomputer")
         response = client.get("/activedirectory/computers/?search=PC01")
         assert len(response.data) == 1
+
+    def test_stats_match_counts_ignore_removed_computers(self, make_api_client, domain, asset):
+        # removed from the directory but still linked: must only count as removed
+        ADComputer.objects.create(
+            domain=domain, object_guid="guid-removed", name="PC01", distinguished_name="CN=PC01",
+            asset=asset, link_mode="auto", match_status="linked", in_directory=False,
+        )
+        for name, match_status in (("PC02", "linked"), ("PC03", "unlinked"), ("PC04", "ambiguous")):
+            ADComputer.objects.create(
+                domain=domain, object_guid=f"guid-{name}", name=name, distinguished_name=f"CN={name}",
+                match_status=match_status,
+            )
+        client = make_api_client("view_adcomputer")
+        response = client.get("/activedirectory/computers/stats/")
+        assert response.status_code == 200
+        assert response.data == {"total": 4, "linked": 1, "unlinked": 1, "ambiguous": 1, "removed": 1}
 
     def test_link(self, make_api_client, computer, asset):
         client = make_api_client("change_adcomputer")
@@ -588,6 +565,16 @@ class TestSyncDomainFailureHandling:
 
         SyncReport.objects.create(domain=domain, status="running")
         assert ad_sync.is_sync_running(domain) is True
+
+    def test_start_sync_report_refuses_a_second_running_report(self, domain):
+        """Scheduler and CLI syncs must not both create a running report."""
+        from extensions.activedirectory.management.commands.ad_sync import start_sync_report
+
+        first = start_sync_report(domain)
+        assert first is not None
+        second = start_sync_report(domain)
+        assert second is None
+        assert SyncReport.objects.filter(domain=domain, status="running").count() == 1
 
     def test_same_computer_name_in_two_domains_does_not_crash_and_is_ambiguous(
         self, domain, asset

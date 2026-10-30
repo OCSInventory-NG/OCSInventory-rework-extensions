@@ -6,7 +6,6 @@ export async function createComponent(api) {
 	const ADDomainModal = ADDomainModalComp.createComponent(api)
 	const ADSyncReportsModalComp = await api.importModule("/extensions/activedirectory/components/ADSyncReportsModal.js")
 	const ADSyncReportsModal = await ADSyncReportsModalComp.createComponent(api)
-	const { startDomainSync, waitForReport } = await api.importModule("/extensions/activedirectory/components/adSync.js")
 
 	const SECURITY_VARIANTS = { ldaps: "success", starttls: "info", none: "warning" }
 	const SYNC_STATUS_VARIANTS = { success: "success", error: "danger", running: "info" }
@@ -38,7 +37,6 @@ export async function createComponent(api) {
 				canadd: false,
 				canedit: false,
 				candelete: false,
-				syncingId: null,
 			}
 		},
 
@@ -110,26 +108,6 @@ export async function createComponent(api) {
 					this.errored = true
 				}
 			},
-
-			async syncDomain(domainId) {
-				this.syncingId = domainId
-				this.errored = false
-				this.errormsg = null
-				try {
-					const reportId = await startDomainSync(api, domainId)
-					const report = reportId ? await waitForReport(api, reportId) : null
-					await this.fetchDomains()
-					if (report?.status === "error") {
-						this.errormsg = this.$t("activedirectory.sync_failed", { error: report.error_message })
-						this.errored = true
-					}
-				} catch (e) {
-					this.errormsg = e.response?.data?.detail || e.response?.data?.error || e.message
-					this.errored = true
-				} finally {
-					this.syncingId = null
-				}
-			},
 		},
 
 		async mounted() {
@@ -171,21 +149,7 @@ export async function createComponent(api) {
 									<ADSyncReportsModal
 										:domain-id="slotProps.row.item.id"
 										:domain-name="slotProps.row.item.name"
-										@reload-datatable="reloadDatatable"
 									/>
-									<button
-										v-if="canedit"
-										type="button"
-										class="btn btn-ghost-dark"
-										:title="$t('activedirectory.sync_now')"
-										:disabled="syncingId === slotProps.row.item.id"
-										@click="syncDomain(slotProps.row.item.id)"
-									>
-										<font-awesome-icon
-											:icon="['fas', 'arrows-rotate']"
-											:class="{ loading: syncingId === slotProps.row.item.id }"
-										/>
-									</button>
 									<ADDomainModal
 										v-if="canedit"
 										:id="slotProps.row.item.id"

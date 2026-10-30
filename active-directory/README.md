@@ -13,8 +13,7 @@ and assigned user on that asset's detail page.
   attribute - `managedBy` by default)
 - Test the LDAP connection before relying on it
 - Paginated, read-only synchronization of computer objects per domain, run
-  daily by the core scheduler, on demand from the configuration page, or via
-  `python manage.py ad_sync`
+  daily by the core scheduler, or via `python manage.py ad_sync`
 - Conservative name-based matching to a core asset, with manual relink for
   ambiguous or unmatched computers (via the REST API)
 - A sync report per run (counts, status, error) kept for auditability
@@ -96,22 +95,22 @@ Extensions page (`/configurations/extensions`).
 The extension adds one entry to the OCS menu:
 
 - **Configurations > Active Directory**: manage domains (add, edit, test,
-  synchronize, view sync history, delete)
+  view sync history, delete)
 
 It also injects an "Active Directory" widget into any linked asset's detail
 page: domain, organizational unit, assigned user and directory status.
 
 ### Synchronize
 
-From the configuration page, via the per-domain "Synchronize" action or
-from its sync history view, or from the CLI:
+The core scheduler runs it once a day; its schedule is set in
+**Configurations > Automated actions** (task `ad_sync_task.ADSync`).
+
+To run it right away, from the CLI:
 
 ```bash
 python manage.py ad_sync
 python manage.py ad_sync --domain 42
 ```
-
-The core scheduler also runs it once a day.
 
 ## REST API
 

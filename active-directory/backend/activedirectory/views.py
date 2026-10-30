@@ -1,9 +1,7 @@
 import logging
-import threading
 
 import django_filters
 from asset.inventory_base.models import InventoryBase
-from django.db import connections
 from permission.permissions import DefaultModelPermissions
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -12,7 +10,6 @@ from rest_framework.permissions import DjangoModelPermissions
 from rest_framework.response import Response
 
 from .ldap_client import test_connection
-from .management.commands.ad_sync import start_sync_report, sync_domain
 from .models import ADComputer, ADDomain, SyncReport
 from .serializers import (
     ADComputerSerializer,
@@ -27,7 +24,7 @@ logger = logging.getLogger("extensions.activedirectory")
 class RequireChangePermission(DjangoModelPermissions):
     """
     Require change_<model> for every method, for actions that are not plain
-    CRUD (test/sync/link/unlink) but still change or probe server-side state.
+    CRUD (test/link/unlink) but still change or probe server-side state.
     """
 
     perms_map = {method: ["%(app_label)s.change_%(model_name)s"] for method in DjangoModelPermissions.perms_map}
@@ -106,34 +103,6 @@ class ADDomainViewSet(viewsets.ModelViewSet):
         """
         return _run_connection_test(request.data, password_required=True)
 
-    @action(detail=True, methods=["post"], permission_classes=[RequireChangePermission])
-    def sync(self, request, pk=None):
-        domain = self.get_object()
-        report = start_sync_report(domain)
-        if report is None:
-            return Response(
-                {"detail": "A synchronization is already running for this domain."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        # Run in the background: a sync can take well past nginx's 60s and
-        # uwsgi's ~300s timeouts on a large directory, which would otherwise
-        # either show the admin a spurious error while the sync keeps going,
-        # or get the worker killed mid-sync. The report was already created
-        # synchronously above, so is_sync_running() correctly rejects a
-        # concurrent request the moment this one returns.
-        def run():
-            try:
-                sync_domain(domain, report=report)
-            finally:
-                connections.close_all()
-
-        threading.Thread(
-            target=run, name=f"ad-sync-{domain.id}", daemon=True
-        ).start()
-
-        return Response({"report": report.id}, status=status.HTTP_202_ACCEPTED)
-
 
 class ADComputerFilterSet(django_filters.FilterSet):
     ou = django_filters.CharFilter(field_name="ou", lookup_expr="icontains")
@@ -181,11 +150,13 @@ class ADComputerViewSet(
         if domain_id:
             queryset = queryset.filter(domain_id=domain_id)
 
+        # Removed computers keep their match_status: match counts only use present ones.
+        present = queryset.filter(in_directory=True)
         return Response({
             "total": queryset.count(),
-            "linked": queryset.filter(match_status="linked").count(),
-            "unlinked": queryset.filter(match_status="unlinked").count(),
-            "ambiguous": queryset.filter(match_status="ambiguous").count(),
+            "linked": present.filter(match_status="linked").count(),
+            "unlinked": present.filter(match_status="unlinked").count(),
+            "ambiguous": present.filter(match_status="ambiguous").count(),
             "removed": queryset.filter(in_directory=False).count(),
         })
 

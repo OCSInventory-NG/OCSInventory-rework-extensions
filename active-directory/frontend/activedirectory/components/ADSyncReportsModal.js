@@ -2,7 +2,6 @@ export async function createComponent(api) {
 	const Datatable = api.getComponent("Datatable")
 	const Alert = api.getComponent("Alert")
 	const Loader = api.getComponent("Loader")
-	const { startDomainSync, waitForReport } = await api.importModule("/extensions/activedirectory/components/adSync.js")
 
 	const STATUS_VARIANTS = { success: "success", error: "danger", running: "info" }
 
@@ -19,7 +18,6 @@ export async function createComponent(api) {
 				reportsmodal: false,
 				loading: false,
 				isbusy: false,
-				syncing: false,
 				rowdata: [],
 				rowheader: ["started_at", "status", "created_count", "updated_count", "linked_count", "missing_count", "error_message"],
 				errored: false,
@@ -62,25 +60,6 @@ export async function createComponent(api) {
 					this.isbusy = false
 				}
 			},
-
-			async syncNow() {
-				this.syncing = true
-				this.errored = false
-				this.errormsg = null
-				try {
-					const reportId = await startDomainSync(api, this.domainId)
-					// Show the "running" row right away, then refresh once it ends.
-					await this.fetchReports()
-					if (reportId) await waitForReport(api, reportId)
-					await this.fetchReports()
-					this.$emit("reloadDatatable")
-				} catch (e) {
-					this.errormsg = e.response?.data?.detail || e.response?.data?.error || e.message
-					this.errored = true
-				} finally {
-					this.syncing = false
-				}
-			},
 		},
 
 		template: `
@@ -116,16 +95,6 @@ export async function createComponent(api) {
                             />
                         </b-button>
                     </template>
-
-                    <div class="row align-items-center mb-2">
-                        <div class="col-auto ms-auto">
-                            <b-button variant="primary" :disabled="syncing" @click="syncNow">
-                                <b-spinner v-if="syncing" small class="me-1" />
-                                <font-awesome-icon v-else :icon="['fas', 'arrows-rotate']" class="me-1" />
-                                {{ $t('activedirectory.sync_now') }}
-                            </b-button>
-                        </div>
-                    </div>
 
                     <Alert v-if="errored" :message="errormsg" variant="danger" />
 
