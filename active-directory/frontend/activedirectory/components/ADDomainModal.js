@@ -3,7 +3,7 @@ export function createComponent(api) {
 	const Loader = api.getComponent("Loader")
 
 	// Fields the test endpoints read from the form; on edit an empty password
-	// falls back to the stored one server-side.
+	// reuses the stored one only if the connection target is unchanged.
 	const TEST_FIELDS = ["server", "port", "security", "verify_certificate", "bind_dn", "bind_password", "base_dn"]
 
 	const emptyRow = () => ({
@@ -124,11 +124,12 @@ export function createComponent(api) {
 					const { data } = await api.http.post(url, payload)
 					this.testResult = data
 				} catch (e) {
+					const data = e.response?.data
 					this.testResult = {
 						ok: false,
-						error: e.response?.data?.error
-							|| (e.response?.data && JSON.stringify(e.response.data))
-							|| e.message,
+						error: data?.bind_password
+							? this.$t("activedirectory.test_password_required")
+							: data?.error || (data && JSON.stringify(data)) || e.message,
 					}
 				} finally {
 					this.testing = false

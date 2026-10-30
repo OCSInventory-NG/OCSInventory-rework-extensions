@@ -40,6 +40,7 @@
         "confirm_delete": "Are you sure you want to delete this domain?",
         "test_connection": "Test connection",
         "test_success": "Connection successful to {server}.",
+        "test_password_required": "Enter the password to test these connection settings.",
         "view_reports": "Sync history",
         "reports_title": "Sync history: {name}",
         "back_to_domains": "Back to domains",

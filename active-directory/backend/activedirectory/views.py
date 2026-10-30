@@ -49,13 +49,22 @@ class RequireAddOrChangePermission(DjangoModelPermissions):
         )
 
 
-def _run_connection_test(payload, password_required):
+CONNECTION_TARGET_FIELDS = ("server", "port", "security", "verify_certificate", "bind_dn")
+
+
+def _run_connection_test(payload, stored_domain=None):
     serializer = ADDomainTestSerializer(data=payload)
     serializer.is_valid(raise_exception=True)
-    if password_required and not serializer.validated_data.get("bind_password"):
-        raise serializers.ValidationError(
-            {"bind_password": "This field is required."}
+    if not serializer.validated_data.get("bind_password"):
+        target_changed = stored_domain is None or any(
+            serializer.validated_data[field] != getattr(stored_domain, field)
+            for field in CONNECTION_TARGET_FIELDS
         )
+        if target_changed:
+            raise serializers.ValidationError(
+                {"bind_password": "Enter the password to test these connection settings."}
+            )
+        serializer.validated_data["bind_password"] = stored_domain.bind_password
 
     # Never saved: connect() only reads these fields, it never persists
     # the unvalidated/not-yet-confirmed candidate.
@@ -81,14 +90,10 @@ class ADDomainViewSet(viewsets.ModelViewSet):
         Test the connection using the submitted form fields (edit form),
         not blindly the saved row: an admin must be able to try a server or
         credential change before saving it. An empty/missing bind_password
-        falls back to the one already stored, same as a plain update.
+        falls back to the one already stored, as long as the connection
+        target is unchanged (see CONNECTION_TARGET_FIELDS).
         """
-        domain = self.get_object()
-        payload = dict(request.data)
-        if not payload.get("bind_password"):
-            payload["bind_password"] = domain.bind_password
-
-        return _run_connection_test(payload, password_required=False)
+        return _run_connection_test(request.data, stored_domain=self.get_object())
 
     @action(
         detail=False,
@@ -101,7 +106,7 @@ class ADDomainViewSet(viewsets.ModelViewSet):
         Same as above, for the creation form: there is no saved domain yet,
         so bind_password can't fall back to anything and is required.
         """
-        return _run_connection_test(request.data, password_required=True)
+        return _run_connection_test(request.data)
 
 
 class ADComputerFilterSet(django_filters.FilterSet):

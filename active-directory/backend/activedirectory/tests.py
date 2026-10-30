@@ -181,6 +181,28 @@ class TestADDomainAPI:
         candidate = mock_test.call_args[0][0]
         assert candidate.bind_password == domain.bind_password
 
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("server", "attacker.example"),
+            ("port", 389),
+            ("security", "none"),
+            ("verify_certificate", False),
+            ("bind_dn", "other@corp.local"),
+        ],
+    )
+    @patch("extensions.activedirectory.views.test_connection")
+    def test_test_action_never_sends_stored_password_to_a_changed_target(
+        self, mock_test, make_api_client, domain, field, value
+    ):
+        client = make_api_client("change_addomain")
+        payload = {"server": domain.server, "bind_dn": domain.bind_dn, "base_dn": domain.base_dn}
+        payload[field] = value
+        response = client.post(f"/activedirectory/domains/{domain.id}/test/", payload, format="json")
+        assert response.status_code == 400
+        assert "bind_password" in response.data
+        mock_test.assert_not_called()
+
     @patch("extensions.activedirectory.views.test_connection")
     def test_test_action_uses_submitted_fields_not_the_saved_row(self, mock_test, make_api_client, domain):
         mock_test.return_value = (True, None)

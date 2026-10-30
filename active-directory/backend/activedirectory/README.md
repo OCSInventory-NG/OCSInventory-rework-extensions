@@ -117,7 +117,7 @@ See the functional specification for the full contract
 | GET/POST | `/activedirectory/domains/` | List / create domains |
 | GET/PUT/PATCH/DELETE | `/activedirectory/domains/{id}/` | Retrieve / update / delete a domain |
 | POST | `/activedirectory/domains/test/` | Test connection settings from the creation form (not yet saved); requires `add_addomain` or `change_addomain` |
-| POST | `/activedirectory/domains/{id}/test/` | Test connection settings from the edit form; an empty/missing `bind_password` falls back to the one already stored |
+| POST | `/activedirectory/domains/{id}/test/` | Test connection settings from the edit form; an empty/missing `bind_password` falls back to the one already stored, unless the server, port, security, certificate verification or bind DN changed (400) |
 | GET | `/activedirectory/computers/` | List computers (filter/search; `?domain=`, `?asset=`, `?match_status=`, `?in_directory=`, `?enabled=`, `?ou=`) |
 | GET | `/activedirectory/computers/stats/` | Aggregate counts (`total`, `linked`, `unlinked`, `ambiguous`, `removed`); accepts `?domain=` |
 | GET | `/activedirectory/computers/{id}/` | Retrieve a computer |
