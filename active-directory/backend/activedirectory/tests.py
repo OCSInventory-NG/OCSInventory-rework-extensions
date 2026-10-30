@@ -746,6 +746,31 @@ class TestSyncDomainFailureHandling:
         assert ADComputer.objects.filter(domain=domain, object_guid="guid-good").exists()
         assert not ADComputer.objects.filter(domain=domain, object_guid="guid-bad").exists()
 
+    def test_lost_connection_keeps_the_assigned_user(self, domain, monkeypatch):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        user_dn = "CN=Jane Doe,DC=corp,DC=local"
+        computer = ADComputer.objects.create(
+            domain=domain, object_guid="guid-1", name="PC01", distinguished_name="CN=PC01",
+            assigned_user_raw=user_dn, assigned_user_name="Jane Doe", assigned_user_login="jdoe",
+        )
+
+        class DroppedConnection(_FakeConnection):
+            def search_s(self, base, scope, filterstr, attrlist):
+                raise ldap.SERVER_DOWN({"desc": "Can't contact LDAP server"})
+
+        monkeypatch.setattr(
+            ad_sync, "iter_computers", lambda _domain: iter([_entry("PC01", "guid-1", assigned_user_raw=user_dn)])
+        )
+        monkeypatch.setattr(ad_sync, "connect", lambda _domain: DroppedConnection())
+
+        report = ad_sync.sync_domain(domain)
+
+        assert report.status == "error"
+        computer.refresh_from_db()
+        assert computer.assigned_user_name == "Jane Doe"
+        assert computer.assigned_user_login == "jdoe"
+
 
 class _FakeConnection:
     def unbind_s(self):
@@ -791,6 +816,27 @@ class TestResolveAssignedUserRealReturnShape:
                 raise ldap.NO_SUCH_OBJECT({"desc": "No such object"})
 
         assert resolve_assigned_user(domain, FakeConn(), "CN=Gone,DC=corp,DC=local") == ("", "", "")
+
+    @pytest.mark.parametrize("error", [ldap.INVALID_DN_SYNTAX, ldap.REFERRAL])
+    def test_unresolvable_value_returns_empty_strings(self, domain, error):
+        from extensions.activedirectory.ldap_client import resolve_assigned_user
+
+        class FakeConn:
+            def search_s(self, base, scope, filterstr, attrlist):
+                raise error({"desc": "unresolvable"})
+
+        assert resolve_assigned_user(domain, FakeConn(), "jdoe") == ("", "", "")
+
+    @pytest.mark.parametrize("error", [ldap.SERVER_DOWN, ldap.TIMEOUT])
+    def test_connection_error_is_raised(self, domain, error):
+        from extensions.activedirectory.ldap_client import resolve_assigned_user
+
+        class FakeConn:
+            def search_s(self, base, scope, filterstr, attrlist):
+                raise error({"desc": "connection problem"})
+
+        with pytest.raises(error):
+            resolve_assigned_user(domain, FakeConn(), "CN=Jane Doe,DC=corp,DC=local")
 
 
 # --- TLS options are per-connection, not process-wide -----------------------

@@ -229,8 +229,12 @@ def iter_computers(domain):
         conn.unbind_s()
 
 
+# "No such user" answers; any other LDAP error (e.g. lost connection) is raised.
+_UNRESOLVED_USER_ERRORS = (ldap.NO_SUCH_OBJECT, ldap.INVALID_DN_SYNTAX, ldap.REFERRAL)
+
+
 def resolve_assigned_user(domain, conn, user_dn):
-    """Resolve a user DN (e.g. managedBy) to name/login/email, best-effort."""
+    """Resolve a user DN (e.g. managedBy) to name/login/email."""
     if not user_dn:
         return "", "", ""
     try:
@@ -244,7 +248,7 @@ def resolve_assigned_user(domain, conn, user_dn):
             "(objectClass=user)",
             ["cn", "sAMAccountName", "mail"],
         )
-    except ldap.LDAPError:
+    except _UNRESOLVED_USER_ERRORS:
         return "", "", ""
 
     if not results or not results[0][0]:
