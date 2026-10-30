@@ -1,0 +1,6 @@
+{
+    "page_size": 500,
+    "connect_timeout_seconds": 10,
+    "search_timeout_seconds": 120,
+    "stale_running_report_seconds": 3600
+}
