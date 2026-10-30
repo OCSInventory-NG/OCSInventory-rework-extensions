@@ -744,6 +744,18 @@ class TestSyncDomainFailureHandling:
         assert computer.link_mode == "manual_unlinked"
         assert computer.match_status == "unlinked"
 
+    def test_computer_back_in_the_directory_counts_as_updated(self, domain):
+        from extensions.activedirectory.management.commands import ad_sync
+
+        entry = _entry("PC01", "guid-1")
+        ad_sync.upsert_computer(domain, entry, conn=None)
+        ADComputer.objects.filter(object_guid="guid-1").update(in_directory=False)
+
+        _created, changed, _linked = ad_sync.upsert_computer(domain, entry, conn=None)
+        assert changed is True
+        _created, changed, _linked = ad_sync.upsert_computer(domain, entry, conn=None)
+        assert changed is False
+
     def test_one_failing_computer_does_not_abort_the_whole_sync(self, domain, asset, monkeypatch):
         from extensions.activedirectory.management.commands import ad_sync
 

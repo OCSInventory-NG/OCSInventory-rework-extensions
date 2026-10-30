@@ -166,13 +166,13 @@ def sync_domain(domain):
 
 
 # Fields compared to tell a real update from a computer that was simply
-# seen again unchanged (last_seen_at/in_directory always change, so they are
-# deliberately excluded from the comparison).
+# seen again unchanged (last_seen_at always changes, so it is excluded).
 _TRACKED_FIELDS = [
     "name", "dns_hostname", "distinguished_name", "ou", "ou_path",
     "os_name", "os_version", "enabled", "description", "when_created",
     "last_logon", "password_last_set", "assigned_user_raw",
     "assigned_user_name", "assigned_user_login", "assigned_user_email",
+    "in_directory",
 ]
 
 
