@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from asset.inventory_base.models import InventoryBase
 from automation.rule.context import get_resolver_for_trigger
+from cryptography.fernet import Fernet
 from django.urls import clear_url_caches
 from django.utils import timezone
 from extension.models import Extension
@@ -480,6 +481,11 @@ class TestMatching:
 # --- Domain model password encryption ------------------------------------
 
 class TestADDomainEncryption:
+    @pytest.fixture(autouse=True)
+    def _encryption_key(self, settings):
+        # without a key the core stores the password in clear
+        settings.FIELD_ENCRYPTION_KEY = Fernet.generate_key().decode()
+
     def test_password_stored_encrypted_in_db(self, domain):
         from django.db import connection
 
