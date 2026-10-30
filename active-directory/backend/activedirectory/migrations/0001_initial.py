@@ -33,6 +33,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('inventory_base', '0001_initial'),
         ('scheduler', '0001_initial'),
+        ('history', '0001_initial'),
     ]
 
     operations = [
