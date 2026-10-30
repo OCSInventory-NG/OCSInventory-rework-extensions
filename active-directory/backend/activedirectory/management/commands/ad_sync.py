@@ -71,6 +71,10 @@ def _close_stale_running_reports(domain):
         stale_report.finished_at = timezone.now()
         stale_report.save()
 
+        domain.last_sync_at = stale_report.finished_at
+        domain.last_sync_status = "error"
+        domain.save(update_fields=["last_sync_at", "last_sync_status"])
+
 
 def is_sync_running(domain):
     """Tell whether a (non abandoned) sync is currently running for this domain."""

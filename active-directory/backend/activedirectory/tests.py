@@ -581,6 +581,9 @@ class TestSyncDomainFailureHandling:
         stale.refresh_from_db()
         assert stale.status == "error"
         assert "Abandoned" in stale.error_message
+        domain.refresh_from_db()
+        assert domain.last_sync_status == "error"
+        assert domain.last_sync_at == stale.finished_at
 
     def test_recent_running_report_still_blocks(self, domain):
         from extensions.activedirectory.management.commands import ad_sync
