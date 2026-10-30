@@ -356,6 +356,21 @@ class TestADComputerAPI:
         assert response.status_code == 200
         assert response.data == {"total": 4, "linked": 1, "unlinked": 1, "ambiguous": 1, "removed": 1}
 
+    def test_stats_domain_filter_is_validated_like_the_list(self, make_api_client, computer):
+        other_domain = ADDomain.objects.create(
+            name="LAB", server="dc.lab.local", bind_dn="svc@lab.local", bind_password="pwd", base_dn="DC=lab,DC=local"
+        )
+        ADComputer.objects.create(domain=other_domain, object_guid="guid-lab", name="LAB01", distinguished_name="CN=LAB01")
+        client = make_api_client("view_adcomputer")
+        response = client.get(f"/activedirectory/computers/stats/?domain={computer.domain_id}")
+        assert response.data["total"] == 1
+
+        for value in ("abc", "999999"):
+            assert client.get(f"/activedirectory/computers/?domain={value}").status_code == 400
+            response = client.get(f"/activedirectory/computers/stats/?domain={value}")
+            assert response.status_code == 400
+            assert "domain" in response.data
+
     def test_ordering_by_ou_path(self, make_api_client, domain):
         for name, ou_path in (("PC01", "Paris / Laptops"), ("PC02", "Lyon")):
             ADComputer.objects.create(

@@ -150,10 +150,12 @@ class ADComputerViewSet(
         doesn't need every row loaded client side to show totals/filters.
         Accepts the same ?domain= filter as the list endpoint.
         """
-        queryset = ADComputer.objects.all()
-        domain_id = request.query_params.get("domain")
-        if domain_id:
-            queryset = queryset.filter(domain_id=domain_id)
+        domain_filter = ADComputerFilterSet(
+            {"domain": request.query_params.get("domain", "")}, queryset=ADComputer.objects.all()
+        )
+        if not domain_filter.is_valid():
+            raise serializers.ValidationError(domain_filter.errors)
+        queryset = domain_filter.qs
 
         # Removed computers keep their match_status: match counts only use present ones.
         present = queryset.filter(in_directory=True)
