@@ -10,9 +10,9 @@ export async function createComponent(api) {
 	const MATCH_VARIANTS = { unlinked: "secondary", ambiguous: "warning" }
 	// Datatable sort keys that map to a backend ordering field; the other
 	// computed columns cannot be sorted server-side.
-	const ORDERING_FIELDS = { name: "name", ou: "ou", match_status_label: "match_status" }
+	const ORDERING_FIELDS = { name: ["name"], ou: ["ou_path", "ou"], match_status_label: ["match_status"] }
 	const NON_SORTABLE_FIELDS = ["domain_name", "in_directory_label", "assigned_user_label", "enabled_label", "asset_name"]
-	const DEFAULT_ORDERING = "name"
+	const DEFAULT_ORDERING = "name,id"
 	const STATUS_FILTERS = { active: "true", inactive: "false" }
 	const EXPORT_PAGE_SIZE = 500
 
@@ -21,9 +21,10 @@ export async function createComponent(api) {
 	const toApiOrdering = (ordering) => {
 		if (!ordering) return DEFAULT_ORDERING
 		const desc = ordering.startsWith("-")
-		const field = ORDERING_FIELDS[desc ? ordering.slice(1) : ordering]
-		if (!field) return DEFAULT_ORDERING
-		return desc ? `-${field}` : field
+		const fields = ORDERING_FIELDS[desc ? ordering.slice(1) : ordering]
+		if (!fields) return DEFAULT_ORDERING
+		// id last: offset pagination needs a unique order
+		return [...fields, "id"].map((field) => (desc ? `-${field}` : field)).join(",")
 	}
 
 	// Shared stats + filters + table block, rendered inside the active tab

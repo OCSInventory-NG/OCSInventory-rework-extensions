@@ -356,6 +356,16 @@ class TestADComputerAPI:
         assert response.status_code == 200
         assert response.data == {"total": 4, "linked": 1, "unlinked": 1, "ambiguous": 1, "removed": 1}
 
+    def test_ordering_by_ou_path(self, make_api_client, domain):
+        for name, ou_path in (("PC01", "Paris / Laptops"), ("PC02", "Lyon")):
+            ADComputer.objects.create(
+                domain=domain, object_guid=f"guid-{name}", name=name, distinguished_name=f"CN={name}",
+                ou_path=ou_path,
+            )
+        client = make_api_client("view_adcomputer")
+        response = client.get("/activedirectory/computers/?ordering=ou_path,id")
+        assert [computer["name"] for computer in response.data] == ["PC02", "PC01"]
+
     def test_link(self, make_api_client, computer, asset):
         client = make_api_client("change_adcomputer")
         response = client.post(

@@ -141,7 +141,7 @@ class ADComputerViewSet(
         OrderingFilter,
     ]
     search_fields = ["name", "dns_hostname", "assigned_user_name", "assigned_user_login"]
-    ordering_fields = ["id", "name", "ou", "match_status", "last_seen_at"]
+    ordering_fields = ["id", "name", "ou", "ou_path", "match_status", "last_seen_at"]
 
     @action(detail=False, methods=["get"])
     def stats(self, request):
