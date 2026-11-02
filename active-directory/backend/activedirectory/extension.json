@@ -1,0 +1,7 @@
+{
+    "name": "Active Directory",
+    "version": "1.0.0",
+    "author": "OCS Inventory Team",
+    "description": "Read-only sync of Active Directory computer objects into inventory assets.",
+    "django_app": "activedirectory"
+}
